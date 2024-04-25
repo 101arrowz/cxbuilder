@@ -49,7 +49,11 @@ if [ $IS_MACOS = 0 ]; then
 fi
 
 if ([ $IS_MACOS = 0 ] || [ `arch` != "arm64" ]) && [ $USE_GPTK = 1 ]; then
-    err "hi"
+    err "[warn] building with GPTk on a non-Apple Silicon device, but GPTk only supports Apple Silicon"
+    if [ -z "$CXB_FORCE_GPTK" ]; then
+        err "[error] exiting; either use --no-gptk, or set \$CXB_FORCE_GPTK build with GPTk anyway"
+        exit 1
+    fi
 fi
 
 if [ $IS_MACOS != 0 ]; then
@@ -57,39 +61,41 @@ if [ $IS_MACOS != 0 ]; then
     export CXX="${CXX:-/usr/bin/clang++}";
 fi
 
-# configure --disable-option-checking \
-# --disable-tests \         
-# --enable-archs=i386,x86_64 \
-# --without-alsa \
-# --without-capi \
-# --with-coreaudio \
-# --with-cups \
-# --without-dbus \
-# --without-fontconfig \
-# --with-freetype \
-# --with-gettext \
-# --without-gettextpo \
-# --without-gphoto \
-# --with-gnutls \
-# --without-gssapi \
-# --with-gstreamer \
-# --with-inotify \
-# --without-krb5 \
-# --with-mingw \
-# --without-netapi \
-# --with-opencl \
-# --with-opengl \
-# --without-oss \
-# --with-pcap \
-# --with-pcsclite \
-# --with-pthread \
-# --without-pulse \
-# --without-sane \
-# --with-sdl \
-# --without-udev \
-# --with-unwind \
-# --without-usb \
-# --without-v4l2 \
-# --with-vulkan \
-# --without-wayland \
-# --without-x
+# TODO: which file?
+# configure
+#     --disable-option-checking \
+#     --disable-tests \         
+#     --enable-archs=i386,x86_64 \
+#     --without-alsa \
+#     --without-capi \
+#     --with-coreaudio \
+#     --with-cups \
+#     --without-dbus \
+#     --without-fontconfig \
+#     --with-freetype \
+#     --with-gettext \
+#     --without-gettextpo \
+#     --without-gphoto \
+#     --with-gnutls \
+#     --without-gssapi \
+#     --with-gstreamer \
+#     --with-inotify \
+#     --without-krb5 \
+#     --with-mingw \
+#     --without-netapi \
+#     --with-opencl \
+#     --with-opengl \
+#     --without-oss \
+#     --with-pcap \
+#     --with-pcsclite \
+#     --with-pthread \
+#     --without-pulse \
+#     --without-sane \
+#     --with-sdl \
+#     --without-udev \
+#     --with-unwind \
+#     --without-usb \
+#     --without-v4l2 \
+#     --with-vulkan \
+#     --without-wayland \
+#     --without-x
