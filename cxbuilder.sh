@@ -11,6 +11,7 @@ CXB_TEMP="${CXB_TEMP:-.cxbuilder}"
 verbose=0
 is_macos=0; test "`uname -s`" = "Darwin" && is_macos=1
 is_interactive=0; test -t 0 && is_interactive=1
+fetch_deps=1
 wine_dir=
 use_gptk=
 use_dxvk=
@@ -37,6 +38,13 @@ warn() {
     out="${out%?}"
     eprint "$out"
     log_write "$out"
+}
+
+key_info() {
+    out=`fmt_lr "[info]  " "\n" "$@"; printf "."`
+    out="${out%?}"
+    eprint "$out"
+    log_write "$out"   
 }
 
 info() {
@@ -77,7 +85,7 @@ eprintn() { printf "$1\n" >&2; }
 log_write() { printf "$1" >> $CXB_LOG_FILE; }
 
 usage() {
-    eprintn "$0 [-v] [-x] [--wine dir] [--gptk dir] [--dxvk dir] [--out dest_dir] [source_dir]"
+    eprintn "$0 [-v] [-x] [--wine dir] [--gptk dir] [--dxvk dir] [--no-deps] [--out dest_dir] [source_dir]"
     eprintn ""
     eprintn "Arguments:"
     eprintn "    -h, --help           Prints this help message and exits"
@@ -111,6 +119,17 @@ usage() {
     eprintn "                         will take priority (i.e. only the x32/ DLLs from DXVK"
     eprintn "                         will be used). Defaults to [source_dir]/dxvk."
     eprintn ""
+    eprintn "    --no-deps            Disables the built-in dependency fetcher. Setting this"
+    eprintn "                         flag makes it possible to use custom builds of Wine"
+    eprintn "                         dependencies, rather than pre-built versions from the"
+    eprintn "                         Homebrew project; however, you will need to configure"
+    eprintn "                         the static and dynamic linker flags manually to point"
+    eprintn "                         to the correct locations of your dependencies. This"
+    eprintn "                         is not necessary for most builds and can lead to many"
+    eprintn "                         headaches if misused; the built-in dependency fetcher"
+    eprintn "                         is very fast and does not install anything globally"
+    eprintn "                         into your system (not even Homebrew!)"
+    eprintn ""
     eprintn "    -o, --out dest_dir   Where to generate the final Wine build. This directory"
     eprintn "                         will contain a similar structure to /usr/local (and"
     eprintn "                         that is indeed a valid value for this argument) after"
@@ -135,6 +154,7 @@ do
     --no-dxvk) use_dxvk=0;;
     --gptk) shift; use_gptk=1; gptk_dir="$1";;
     --dxvk) shift; use_dxvk=1; dxvk_dir="$1";;
+    --no-deps) fetch_deps=0;;
     -o|--out) shift; dst_dir="$1";;
     -*) eprintn "unknown argument $1"; usage; exit 1;;
     *)
@@ -337,7 +357,7 @@ if ! test -d "$dst_dir"; then
         exite "failed to create $dst_dir; path exists"
     fi
 
-    if mkdir "$dst_dir"; then
+    if mkdir "$dst_dir" 2> /dev/null; then
         info "successfully created $dst_dir"
     else
         exite "failed to create $dst_dir"
@@ -349,7 +369,7 @@ else
 fi
 
 if ! test -d "$scratch_dir"; then
-    mkdir "$scratch_dir" || if tmp_dir="`mktemp -d 2> /dev/null`"; then
+    mkdir "$scratch_dir" 2> /dev/null || if tmp_dir="`mktemp -d 2> /dev/null`"; then
         scratch_dir="$tmp_dir"
     else
         exite "failed to create CXBuilder tempdir $scratch_dir"
@@ -363,10 +383,148 @@ info "validation complete; starting build"
 mvk_dir="$scratch_dir/molten-vk"
 wine_build_dir="$scratch_dir/wine-build"
 
-# TODO: install MoltenVK, gettext, etc.
-if test $is_macos = 1; then
+if test $fetch_deps = 1; then
+    brew_dir="$scratch_dir/brew"
+    brew_dl_dir="$brew_dir/.dl"
+    ext_dir="$scratch_dir/ext"
+    ext_scratch_dir="$ext_dir/.scratch"
     
-end
+    test -d "$brew_dir" || mkdir "$brew_dir" 2> /dev/null || exite "failed to create $brew_dir"
+    test -d "$ext_dir" || mkdir "$ext_dir" 2> /dev/null || exite "failed to create $ext_dir"
+
+    brew_deps="bison pkg-config mingw-w64 freetype gettext gnutls gstreamer sdl2"
+    if test $is_macos = 1; then
+        brew_deps="$brew_deps molten-vk"
+    fi
+
+    missing_brew_deps=""
+
+    for d in $brew_deps; do
+        if test ! -d "$brew_dir/$d"; then
+            missing_brew_deps="${missing_brew_deps:+$missing_brew_deps }$d"
+        fi
+    done
+
+    pre_brew() {
+        for cmd in curl tar; do
+            command -v $cmd > /dev/null || exite "cannot locate $cmd; please install $cmd to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
+        done
+        test -d "$brew_dl_dir" || mkdir "$brew_dl_dir" 2> /dev/null || exite "failed to create $brew_dl_dir"
+    }
+
+    pre_ext() {
+        test -d "$ext_scratch_dir" || mkdir "$ext_scratch_dir" 2> /dev/null || exite "failed to create $ext_scratch_dir"
+    }
+
+    # extract json
+    ext_json() {
+        if test $is_macos = 1; then
+            osj_da='Object.defineProperty(Array.prototype, "sh", { get: function() { return this.join(" "); } });'
+            osj_parse='var data = JSON.parse($.NSString.alloc.initWithDataEncoding($.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFileAndReturnError(null), 4).js);'
+            /usr/bin/osascript -l 'JavaScript' -e "$osj_da" -e "$osj_parse" -e "var res = data$1; typeof res == 'string' ? res : res == null ? undefined : JSON.stringify(res)" 2> /dev/null
+        else
+            builtin_py=`command -v python` || builtin_py=`command -v python3` || \
+                exite "cannot locate Python; please install Python to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
+            pyjd_dd='class dd(dict): __getattr__ = dict.get; __setattr__ = dict.__setitem__; __delattr__ = dict.__delitem__'
+            pyjd_da=`printf "class da(list):\n @property\n def length(self):\n  return len(self)\n @property\n def sh(self):\n  return ' '.join(str(v) for v in self)"`
+            pyjd_conv='cv = lambda v: da([cv(a) for a in v]) if isinstance(v, list) else (dd({k:cv(a) for k, a in v.items()}) if isinstance(v, dict) else v)'
+            pyj_decoder=`printf "import sys, json\n$pyjd_dd\n$pyjd_da\n$pyjd_conv\ndata = cv(json.load(sys.stdin))"`
+            PYTHONIOENCODING=utf8 $builtin_py -c "$pyj_decoder; res = data$1; print(res if isinstance(res, str) else json.dumps(res)) if res is not None else None" 2> /dev/null
+        fi
+    }
+
+    sys_info=x86_64_linux
+    if test $is_macos = 1; then
+        case `/usr/bin/sw_vers -productVersion` in
+            14.*) sys_info="sonoma";;
+            13.*) sys_info-"ventura";;
+            12.*) sys_info="monterey";;
+            *) sys_info="unknown";;
+        esac
+    fi
+
+    # minibrew - uses the Homebrew API to fetch prebuilt bottles
+    minibrew() {
+        if test -d "$brew_dl_dir/$1"; then
+            info "package $1 already installed; skipping"
+            return
+        fi
+
+        info_url="https://formulae.brew.sh/api/formula/$1.json"
+        info_json=`curl -s "$info_url"`
+
+        info_bottle=`ext_json .bottle.stable <<< "$info_json"`
+        test -z "$info_bottle" && exite "failed to load bottle info for $1"
+        
+        info_bottle_arch=`ext_json ".files.$sys_info" <<< "$info_bottle"`
+        if test -z "$info_bottle_arch"; then
+            info_bottle_arch=`ext_json ".files.all" <<< "$info_bottle"`
+        fi
+        test -z "$info_bottle_arch" && exite "failed to load bottle info for $1, system type $sys_info"
+
+        info_bottle_url=`ext_json ".url" <<< "$info_bottle_arch"`
+        info_bottle_sha=`ext_json ".sha256" <<< "$info_bottle_arch"`
+
+        info "fetching $1 from $info_bottle_url (sha = $info_bottle_sha)"
+        key_info "downloading $1..."
+
+        curl_extra_opts="-s"
+        if test $verbose = 1; then
+            curl_extra_opts="-#"
+        fi
+
+        if curl $curl_extra_opts -g -H "Authorization: Bearer QQ==" -L  -o "$brew_dl_dir/$info_bottle_sha" -C - "$info_bottle_url"; then
+            info "download $1 successful; extracting"
+        else
+            exite "failed to download $1 from $info_bottle_url"
+        fi
+
+        if tar -zxf "$brew_dl_dir/$info_bottle_sha" -C "$brew_dl_dir"; then
+            info "extracting $1 successful"
+        else
+            exite "failed to extract $1 from $brew_dl_dir/$info_bottle_sha to $brew_dl_dir"
+        fi
+
+        info_deps=`ext_json .dependencies.sh <<< "$info_json"`
+
+        for d in $info_deps; do
+            minibrew "$d"
+        done
+    }
+    
+    if test -n "$missing_brew_deps"; then
+        key_info "missing Wine dependencies; installing with built-in dependency fetcher"
+        pre_brew
+
+        for d in $missing_brew_deps; do
+            minibrew "$d"
+        done
+    fi
+
+    libinkq_dir="$ext_dir/libinotify-kqueue"
+
+    if test ! -d "$libinkq_dir"; then
+        key_info "missing libinotify-kqueue; building from source"
+        pre_ext
+        pre_brew
+
+        minibrew "automake"
+
+        key_info "downloading libinotify-kqueue sources..."
+        libinkq_url="https://api.github.com/repos/libinotify-kqueue/libinotify-kqueue/tarball/master"
+
+        libinkq_build_dir="$ext_scratch_dir/libinotify-kqueue"
+        test -d "$libinkq_build_dir" || mkdir "$libinkq_build_dir" || exite "failed to create $libinkq_build_dir"
+
+        if curl -s -L "$libinkq_url" | tar -zx --strip-components=1 -C "$libinkq_build_dir"; then
+            info "download + extract libinotify-kqueue sources successful"
+        else
+            exite "failed to download and extract libinotify-kqueue sources from $libinkq_url"
+        fi
+    fi
+else
+    info "--no-deps specified; assuming dependencies are already available"
+fi
 
 wineconf_args="--disable-option-checking --disable-tests --enable-archs=i386,x86_64 --without-alsa \
 --without-capi --with-coreaudio --with-cups --without-dbus --without-fontconfig --with-freetype \
@@ -376,6 +534,6 @@ wineconf_args="--disable-option-checking --disable-tests --enable-archs=i386,x86
 --with-unwind --without-usb --without-v4l2 --with-vulkan --without-wayland --without-x $CXB_CONF_ARGS"
 
 
-"$wine_dir"/configure $wineconf_args --prefix="$wine_build_dir"
+# "$wine_dir"/configure $wineconf_args --prefix="$wine_build_dir"
 
 # TODO: which file?
