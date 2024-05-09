@@ -9,7 +9,7 @@ CXB_LOG_FILE="${CXB_LOG_FILE:-/dev/null}"
 CXB_TEMP="${CXB_TEMP:-.cxbuilder}"
 
 verbose=0
-is_macos=0; test "`uname -s`" = "Darwin" && is_macos=1
+is_macos=0; test "$(uname -s)" = "Darwin" && is_macos=1
 is_interactive=0; test -t 0 && is_interactive=1
 fetch_deps=1
 wine_dir=
@@ -20,9 +20,10 @@ dxvk_dir=
 source_dir=
 dst_dir=
 tmp_build=
+tmp_prefix=
 
 err() {
-    out=`fmt_lr "[error] " "\n" "$@"; printf "."`
+    out="$(fmt_lr "[error] " "\n" "$@"; printf ".")"
     out="${out%?}"
     eprint "$out"
     log_write "$out"
@@ -34,21 +35,21 @@ exite() {
 }
 
 warn() {
-    out=`fmt_lr "[warn]  " "\n" "$@"; printf "."`
+    out="$(fmt_lr "[warn]  " "\n" "$@"; printf ".")"
     out="${out%?}"
     eprint "$out"
     log_write "$out"
 }
 
 key_info() {
-    out=`fmt_lr "[info]  " "\n" "$@"; printf "."`
+    out="$(fmt_lr "[info]  " "\n" "$@"; printf ".")"
     out="${out%?}"
     eprint "$out"
     log_write "$out"   
 }
 
 info() {
-    out=`fmt_lr "[info]  " "\n" "$@"; printf "."`
+    out="$(fmt_lr "[info]  " "\n" "$@"; printf ".")"
     out="${out%?}"
     if test $verbose = 1; then
         eprint "$out"
@@ -58,12 +59,12 @@ info() {
 
 prompt_continue() {
     if test $is_interactive = 1; then
-        out=`fmt_lr "\n" " [y/N] " "$@"; printf "."`
+        out="$(fmt_lr "\n" " [y/N] " "$@"; printf ".")"
         out="${out%?}"
         log_write "[info]  prompting: $out\n"
 
         eprint "$out"
-        read res
+        read -r res
 
         case $res in
         y*|Y*);;
@@ -80,9 +81,9 @@ fmt_lr() {
     printf "$fmt" "$@"
 }
 
-eprint() { printf "$1" >&2; }
-eprintn() { printf "$1\n" >&2; }
-log_write() { printf "$1" >> $CXB_LOG_FILE; }
+eprint() { printf "%s" "$1" >&2; }
+eprintn() { printf "%s" "$1" >&2; }
+log_write() { printf "%s" "$1" >> "$CXB_LOG_FILE"; }
 
 usage() {
     eprintn "$0 [-v] [-x] [--wine dir] [--gptk dir] [--dxvk dir] [--no-deps] [--out dest_dir] [source_dir]"
@@ -127,7 +128,7 @@ usage() {
     eprintn "                         to the correct locations of your dependencies. This"
     eprintn "                         is not necessary for most builds and can lead to many"
     eprintn "                         headaches if misused; the built-in dependency fetcher"
-    eprintn "                         is very fast and does not install anything globally"
+    eprintn "                         is well-tested and does not install anything globally"
     eprintn "                         into your system (not even Homebrew!)"
     eprintn ""
     eprintn "    -o, --out dest_dir   Where to generate the final Wine build. This directory"
@@ -173,13 +174,16 @@ cleanup() {
     if test ! -z "$tmp_build"; then
         rm -rf "$tmp_build"
     fi
+    if test ! -z "$tmp_prefix"; then
+        rm "$tmp_prefix"
+    fi
     trap - EXIT
     exit
 }
 
 trap cleanup EXIT INT HUP TERM
 
-echo "-- CXBuilder `date '+%Y-%m-%d %H:%M:%S'` --" > $CXB_LOG_FILE
+echo "-- CXBuilder $(date '+%Y-%m-%d %H:%M:%S') --" > "$CXB_LOG_FILE"
 
 if test $is_interactive = 0; then
     info "running non-interactively"
@@ -190,7 +194,7 @@ if test $is_macos = 0; then
 fi
 
 is_apple_silicon=0
-if ( test $is_macos = 1 && test `arch` = "arm64" ); then
+if test $is_macos = 1 && test "$(arch)" = "arm64"; then
     is_apple_silicon=1
     info "running on Apple Silicon"
 else
@@ -198,11 +202,11 @@ else
 fi
 
 if test -z $use_gptk; then
-    info "gptk options unspecified; `test $is_apple_silicon = 1 && echo "enabling by default on Apple Silicon" || echo "disabling by default (not on Applle Silicon)"`"
+    info "gptk options unspecified; $(test $is_apple_silicon = 1 && echo "enabling by default on Apple Silicon" || echo "disabling by default (not on Applle Silicon)")"
     use_gptk=$is_apple_silicon
 fi
 
-if test $is_apple_silicon = 0 && test $use_gptk = 1 && test -z $CXB_FORCE_GPTK; then
+if test $is_apple_silicon = 0 && test $use_gptk = 1 && test -z "$CXB_FORCE_GPTK"; then
     warn "building with GPTk on a non-Apple Silicon device, but GPTk only supports Apple Silicon devices; things will likely break"
     warn "use --no-gptk or set \$CXB_FORCE_GPTK to silence this warning"
     prompt_continue "Continue?"
@@ -223,7 +227,7 @@ fi
 
 info "CC=${CC:-\(unset\)}; CXX: ${CXX:-\(unset\)}"
 
-if test -z $use_dxvk; then
+if test -z "$use_dxvk"; then
     info "dxvk options unspecified; enabling by default"
 fi
 
@@ -301,7 +305,7 @@ if test $use_gptk = 1; then
 
     for p in $gptk_paths; do
         if test ! -e "$gptk_dir$p"; then
-            err "%s; could not find $gptk_dir$p" "$gptk_err"
+            err "%s; could not locate $gptk_dir$p" "$gptk_err"
             exit 1
         fi
     done
@@ -362,20 +366,17 @@ if ! test -d "$dst_dir"; then
     else
         exite "failed to create $dst_dir"
     fi
-else
-    if test -d "$scratch_dir"; then
-        info "found prior CXBuilder tempdir in $dst_dir"
-    fi
 fi
 
 if ! test -d "$scratch_dir"; then
-    mkdir "$scratch_dir" 2> /dev/null || if tmp_dir="`mktemp -d 2> /dev/null`"; then
-        scratch_dir="$tmp_dir"
+    mkdir "$scratch_dir" 2> /dev/null || if tmp_build="$(mktemp -d 2> /dev/null)"; then
+        scratch_dir="$tmp_build"
     else
         exite "failed to create CXBuilder tempdir $scratch_dir"
     fi
     info "successfully created $scratch_dir"
-
+else
+    info "located previous CXBuilder run in $scratch_dir"
 fi
 
 info "validation complete; starting build"
@@ -383,15 +384,88 @@ info "validation complete; starting build"
 mvk_dir="$scratch_dir/molten-vk"
 wine_build_dir="$scratch_dir/wine-build"
 
-if test $fetch_deps = 1; then
-    brew_dir="$scratch_dir/brew"
-    brew_dl_dir="$brew_dir/.dl"
-    ext_dir="$scratch_dir/ext"
-    ext_scratch_dir="$ext_dir/.scratch"
-    
-    test -d "$brew_dir" || mkdir "$brew_dir" 2> /dev/null || exite "failed to create $brew_dir"
-    test -d "$ext_dir" || mkdir "$ext_dir" 2> /dev/null || exite "failed to create $ext_dir"
+abspath() {
+    if test -d "$1"; then
+        echo "$(cd "$1" && pwd)"
+    else
+        echo "$(cd "$(dirname -- "$1")" && pwd)/$(basename "$1")"
+    fi
+}
 
+get_inode() {
+    ls -ldi -- "$1" | cut -d ' ' -f 1
+}
+
+to_prec() {
+    out="$(printf "%.${2}x" "$1")"
+    out_oversize="$((${#out} - $2 + 1))"
+    echo "$out" | cut -c "$out_oversize-"
+}
+
+if test $fetch_deps = 1; then
+    for cmd in curl tar; do
+        command -v $cmd > /dev/null || exite "cannot locate $cmd; please install $cmd to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
+    done
+
+    if test $is_macos = 0; then
+        exite "The dependency fetcher is incomplete for non-macOS systems. Please use --no-deps and install the dependencies manually."
+    fi
+
+    deps_dir="$scratch_dir/deps"
+    deps_dl_dir="$deps_dir/.dl"
+    deps_scratch_dir="$deps_dir/.scratch"
+    # name length must exactly equal 6 (same as "Cellar")
+    brew_dir_name="cxbrew"
+    brew_dir="$deps_dir/$brew_dir_name"
+    ext_dir="$deps_dir/ext"
+
+    for d in "$deps_dir" "$deps_dir/bin" "$deps_dir/lib" "$deps_dir/include" "$deps_dir/opt" "$deps_dir/share" "$deps_dl_dir" "$deps_scratch_dir" "$brew_dir" "$ext_dir"; do
+        test -d "$d" || mkdir "$d" 2> /dev/null || exite "failed to create $d"
+    done
+
+    abs_deps_dir="$(abspath "$deps_dir")"
+
+    export PATH="$abs_deps_dir/bin:${PATH:+:$PATH}"
+    export CPATH="$abs_deps_dir/include${CPATH:+:$CPATH}"
+    export LIBRARY_PATH="$abs_deps_dir/lib:${LIBRARY_PATH:+:$LIBRARY_PATH}"
+
+    scratch_dir_inode="$(get_inode "$scratch_dir")"
+    brew_default_prefix=
+    if test $is_macos = 1; then
+        # note: we only care about x86-64 here
+        brew_default_prefix="/usr/local"
+    else
+        brew_default_prefix="/home/linuxbrew/.linuxbrew"
+    fi
+
+    # length must exactly match length of default platform prefix!
+    tmp_prefix="/tmp/cx$(to_prec "$scratch_dir_inode" "$((${#brew_default_prefix} - 7))")"
+
+    rm -f "$tmp_prefix" && ln -s "$abs_deps_dir" "$tmp_prefix" || exite "failed to symlink $tmp_prefix to $abs_deps_dir"
+ 
+    tmp_prefix_file="$deps_dir/.tmp-prefix"
+    if test ! -e "$tmp_prefix_file" || test "$tmp_prefix" != "$(cat "$tmp_prefix_file" 2> /dev/null || echo)"; then
+        # re-link the files
+        info "microbrew has been moved; re-patching binaries"
+        for d in "$brew_dir"*; do
+            LC_ALL=C find "$d" -type f -exec sh -e -c '
+                brew_default_prefix="$1"
+                tmp_prefix="$2"
+                tmp_write="$3"
+                shift 3
+                for f; do
+                    sed -e "s%/tmp/cx[a-zA-Z0-9]\{$((${#brew_default_prefix} - 7))\}%$tmp_prefix%g" -- "$f" > "$tmp_write"
+                    mv -f -- "$tmp_write" "$f"
+                    if install_name_tool -id "$f" "$f" 2> /dev/null; then
+                        codesign -f -s - "$f" 2> /dev/null
+                    fi
+                done
+            ' sh "$brew_default_prefix" "$tmp_prefix" "$deps_scratch_dir/.cxb-relink" {} +
+        done
+        echo "$tmp_prefix" > "$tmp_prefix_file"
+    fi
+
+    brew_build_deps="bison:pkg-config:mingw-w64"
     brew_deps="bison pkg-config mingw-w64 freetype gettext gnutls gstreamer sdl2"
     if test $is_macos = 1; then
         brew_deps="$brew_deps molten-vk"
@@ -405,65 +479,108 @@ if test $fetch_deps = 1; then
         fi
     done
 
-    pre_brew() {
-        for cmd in curl tar; do
-            command -v $cmd > /dev/null || exite "cannot locate $cmd; please install $cmd to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
-        done
-        test -d "$brew_dl_dir" || mkdir "$brew_dl_dir" 2> /dev/null || exite "failed to create $brew_dl_dir"
-    }
-
-    pre_ext() {
-        test -d "$ext_scratch_dir" || mkdir "$ext_scratch_dir" 2> /dev/null || exite "failed to create $ext_scratch_dir"
-    }
-
-    # extract json
-    ext_json() {
+    # shell json
+    sh_json() {
         if test $is_macos = 1; then
             osj_da='Object.defineProperty(Array.prototype, "sh", { get: function() { return this.join(" "); } });'
-            osj_parse='var data = JSON.parse($.NSString.alloc.initWithDataEncoding($.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFileAndReturnError(null), 4).js);'
-            /usr/bin/osascript -l 'JavaScript' -e "$osj_da" -e "$osj_parse" -e "var res = data$1; typeof res == 'string' ? res : res == null ? undefined : JSON.stringify(res)" 2> /dev/null
+            osj_parse='var data = JSON.parse($.NSProcessInfo.processInfo.environment.objectForKey("json").js);'
+            json="$2" /usr/bin/osascript -l 'JavaScript' -e "$osj_da" -e "$osj_parse" -e "var res = data$1; typeof res == 'string' ? res : res == null ? undefined : JSON.stringify(res)" 2> /dev/null
         else
-            builtin_py=`command -v python` || builtin_py=`command -v python3` || \
+            builtin_py="$(command -v python)" || builtin_py="$(command -v python3)" || \
                 exite "cannot locate Python; please install Python to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
             pyjd_dd='class dd(dict): __getattr__ = dict.get; __setattr__ = dict.__setitem__; __delattr__ = dict.__delitem__'
-            pyjd_da=`printf "class da(list):\n @property\n def length(self):\n  return len(self)\n @property\n def sh(self):\n  return ' '.join(str(v) for v in self)"`
+            pyjd_da="$(printf "class da(list):\n @property\n def length(self):\n  return len(self)\n @property\n def sh(self):\n  return ' '.join(str(v) for v in self)")"
             pyjd_conv='cv = lambda v: da([cv(a) for a in v]) if isinstance(v, list) else (dd({k:cv(a) for k, a in v.items()}) if isinstance(v, dict) else v)'
-            pyj_decoder=`printf "import sys, json\n$pyjd_dd\n$pyjd_da\n$pyjd_conv\ndata = cv(json.load(sys.stdin))"`
-            PYTHONIOENCODING=utf8 $builtin_py -c "$pyj_decoder; res = data$1; print(res if isinstance(res, str) else json.dumps(res)) if res is not None else None" 2> /dev/null
+            pyj_decoder="$(printf "import os, json\n$pyjd_dd\n$pyjd_da\n$pyjd_conv\ndata = cv(json.load(os.environ[\"json\"]))")"
+            json="$2" PYTHONIOENCODING=utf8 $builtin_py -c "$pyj_decoder; res = data$1; print(res if isinstance(res, str) else json.dumps(res)) if res is not None else None" 2> /dev/null
         fi
     }
 
-    sys_info=x86_64_linux
+    sys_info="x86_64_linux"
+    build_sys_info="$sys_info"
+
     if test $is_macos = 1; then
-        case `/usr/bin/sw_vers -productVersion` in
+        case "$(/usr/bin/sw_vers -productVersion)" in
             14.*) sys_info="sonoma";;
             13.*) sys_info-"ventura";;
             12.*) sys_info="monterey";;
             *) sys_info="unknown";;
         esac
+
+        if test $is_apple_silicon = 1; then
+            build_sys_info="arm64_$sys_info"
+        else
+            build_sys_info="$sys_info"
+        fi
     fi
 
-    # minibrew - uses the Homebrew API to fetch prebuilt bottles
-    minibrew() {
-        if test -d "$brew_dl_dir/$1"; then
+    get_link() {
+        # TODO: breaks if you have -> in username
+        # at that point you had it coming though
+        ls -l -- "$1" | awk -F " -> " '{print $2}'
+    }
+
+    linkmerge() {
+        for f in "$1"/*; do
+            tgt_name="${f#"$1/"}"
+            prev_name="$2/$tgt_name"
+            if test -d "$prev_name"; then
+                test -d "$f" || exite "$f is not a directory"
+                if test -L "$prev_name"; then
+                    if test -d "$deps_scratch_dir/.cxb-link"; then
+                        rm "$deps_scratch_dir/.cxb-link"/*
+                    else
+                        mkdir "$deps_scratch_dir/.cxb-link"
+                    fi
+                    old_link="$(get_link "$prev_name")"
+                    new_link=
+                    case "$old_link" in
+                    /*) new_link="$old_link";;
+                    *) new_link="../$old_link";;
+                    esac
+
+                    for f2 in "$prev_name"/*; do
+                        ln -s "$new_link${f2#"$prev_name"}" "$deps_scratch_dir/.cxb-link"
+                    done
+
+                    rm "$prev_name"
+                    # TODO: things could break if interrupted between the rm and mv
+                    mv "$deps_scratch_dir/.cxb-link" "$prev_name"
+                fi
+                new_dst_link=
+                case "$3" in
+                /*) new_dst_link="$3";;
+                *) new_dst_link="../$3";;
+                esac
+                linkmerge "$f" "$prev_name" "$new_dst_link/$tgt_name"
+            else
+                rm -f "$prev_name" && ln -s "$3/$tgt_name" "$prev_name" || exite "could not symlink $3/$tgt_name to $prev_name"
+            fi
+        done
+    }
+
+    # microbrew - uses the Homebrew API to fetch prebuilt bottles
+    # TODO: support multiple architectures (i.e. consider $build_sys_info for build-time dependencies)
+    microbrew() {
+        if test -d "$brew_dir/$1"; then
             info "package $1 already installed; skipping"
             return
         fi
 
         info_url="https://formulae.brew.sh/api/formula/$1.json"
-        info_json=`curl -s "$info_url"`
+        info_json="$(curl -s "$info_url")"
 
-        info_bottle=`ext_json .bottle.stable <<< "$info_json"`
+        info_bottle="$(sh_json .bottle.stable "$info_json")"
         test -z "$info_bottle" && exite "failed to load bottle info for $1"
         
-        info_bottle_arch=`ext_json ".files.$sys_info" <<< "$info_bottle"`
+        info_bottle_arch="$(sh_json ".files.$sys_info" "$info_bottle")"
         if test -z "$info_bottle_arch"; then
-            info_bottle_arch=`ext_json ".files.all" <<< "$info_bottle"`
+            info_bottle_arch="$(sh_json ".files.all" "$info_bottle")"
         fi
         test -z "$info_bottle_arch" && exite "failed to load bottle info for $1, system type $sys_info"
 
-        info_bottle_url=`ext_json ".url" <<< "$info_bottle_arch"`
-        info_bottle_sha=`ext_json ".sha256" <<< "$info_bottle_arch"`
+        info_bottle_url="$(sh_json ".url" "$info_bottle_arch")"
+        info_bottle_sha="$(sh_json ".sha256" "$info_bottle_arch")"
 
         info "fetching $1 from $info_bottle_url (sha = $info_bottle_sha)"
         key_info "downloading $1..."
@@ -473,55 +590,200 @@ if test $fetch_deps = 1; then
             curl_extra_opts="-#"
         fi
 
-        if curl $curl_extra_opts -g -H "Authorization: Bearer QQ==" -L  -o "$brew_dl_dir/$info_bottle_sha" -C - "$info_bottle_url"; then
+        if curl $curl_extra_opts -g -H "Authorization: Bearer QQ==" -L  -o "$deps_dl_dir/$info_bottle_sha" -C - "$info_bottle_url"; then
             info "download $1 successful; extracting"
         else
             exite "failed to download $1 from $info_bottle_url"
         fi
 
-        if tar -zxf "$brew_dl_dir/$info_bottle_sha" -C "$brew_dl_dir"; then
+        if tar -zxf "$deps_dl_dir/$info_bottle_sha" -C "$deps_scratch_dir"; then
             info "extracting $1 successful"
         else
-            exite "failed to extract $1 from $brew_dl_dir/$info_bottle_sha to $brew_dl_dir"
+            exite "failed to extract $1 from $deps_dl_dir/$info_bottle_sha to $deps_scratch_dir"
+        fi
+        
+        key_info "patching $1..."
+        progress_file="$deps_scratch_dir/.patch-progress"
+        LC_ALL=C find "$deps_scratch_dir/$1" -type f -exec sh -e -c '
+            brew_default_prefix="$1"
+            tmp_prefix="$2"
+            tmp_write="$3"
+            brew_dir_name="$4"
+            deps_scratch_dir="$5"
+            progress_file="$6"
+            shift 6
+
+            num_f="$(cat "$progress_file" 2> /dev/null || echo 0)"
+
+            # thanks posix
+            get_perm() {
+                base_perm="$(ls -ld -- "$1" | cut -d " " -f 1)"
+                base_perm="${base_perm#?}"
+                perm_s=""
+
+                for p in o g e; do
+                    perm_c=
+                    case "$(printf %.3s "$base_perm")" in
+                        ---) perm_c=0;;
+                        --?) perm_c=1;;
+                        -w-) perm_c=2;;
+                        -w?) perm_c=3;;
+                        r--) perm_c=4;;
+                        r-?) perm_c=5;;
+                        rw-) perm_c=6;;
+                        rw?) perm_c=7;;
+                    esac
+                    perm_s="$perm_s$perm_c"
+                    base_perm="${base_perm#???}"
+                done
+
+                echo "$perm_s"
+            }
+
+            for f; do
+                num_f="$(($num_f + 1))"
+                case "$num_f" in
+                *000) printf "%i files... " "$num_f" 1>&2;;
+                esac
+
+                # common case: no processing needed
+                f_patch=0
+                if grep -q -e "@@HOMEBREW" "$f"; then
+                    f_patch=1
+                fi
+                f_rel="${f#"$deps_scratch_dir"}"
+
+                if test $f_patch = 0; then
+                    if file "$f" | grep -q "Mach-O"; then
+                        if install_name_tool -id "$tmp_prefix/$brew_dir_name$f_rel" "$f" 2> /dev/null; then
+                            f_perm=$(get_perm "$f")
+                            chmod 644 "$f"
+                            codesign -f -s - "$f" 2> /dev/null
+                            chmod "$f_perm" "$f"
+                        fi
+                    fi
+                else
+                    f_perm=$(get_perm "$f")
+                    sed -e "s%$brew_default_prefix/Cellar%$tmp_prefix/$brew_dir_name%g" -e "s%$brew_default_prefix%$tmp_prefix%g" -- "$f" > "$tmp_write"
+
+                    # TODO: support linux
+                    need_sign=0
+                    if install_name_tool -id "$tmp_prefix/$brew_dir_name$f_rel" "$tmp_write" 2> /dev/null; then
+                        need_sign=1
+                        f_names=$(otool -L "$f" | grep -e "@@HOMEBREW" | awk '\''
+                            /@@HOMEBREW_CELLAR@@/ || /@@HOMEBREW_PREFIX@@/ {
+                                ORS=" "
+                                a=$1
+                                gsub("@@HOMEBREW_CELLAR@@", "'\''"$tmp_prefix/$brew_dir_name"'\''", $1)
+                                gsub("@@HOMEBREW_PREFIX@@", "'\''"$tmp_prefix"'\''", $1)
+                                print "-change", a, $1
+                            }
+                        '\'')
+                        if test -n "$f_names"; then
+                            install_name_tool $f_names "$tmp_write"
+                        fi
+                    fi
+                    # todo: what if directory is not writable?
+                    case "$(file "$tmp_write")" in
+                    *text*) rm -f "$f"; sed -e "s%@@HOMEBREW_CELLAR@@%$tmp_prefix/$brew_dir_name%g" -e "s%@@HOMEBREW_PREFIX@@%$tmp_prefix%g" -e "s%@@HOMEBREW_PERL@@%/usr/bin/perl%g" "$tmp_write" > "$f"; rm "$tmp_write"; chmod "$f_perm" "$f";;
+                    *) mv -f "$tmp_write" "$f"; chmod "$f_perm" "$f";;
+                    esac
+
+                    if test $need_sign = 1; then
+                        codesign -f -s - "$f" 2> /dev/null
+                    fi
+                fi
+            done
+            echo "$num_f" > "$progress_file"
+        ' sh "$brew_default_prefix" "$tmp_prefix" "$deps_scratch_dir/.cxb-relink" "$brew_dir_name" "$deps_scratch_dir" "$progress_file" {} +
+        
+        num_f="$(cat "$progress_file" 2> /dev/null || echo 0)"
+        rm -f "$progress_file"
+        if test "$num_f" -ge 1000; then
+            echo "patched $num_f files"
         fi
 
-        info_deps=`ext_json .dependencies.sh <<< "$info_json"`
+        info "successfully patched $1: $num_f files"
+
+        info_deps="$(sh_json .dependencies.sh "$info_json")"
+        
+        if test -n "$info_deps"; then
+            info "$1 depends on: $info_deps"
+        fi
 
         for d in $info_deps; do
-            minibrew "$d"
+            microbrew "$d"
         done
+        
+        dep_ver="$(ls "$deps_scratch_dir/$1")"
+
+        info "linking $1 into $deps_dir"
+        # TODO: use the metadata from Homebrew for this
+        for td in bin lib include share; do
+            if test -d "$deps_scratch_dir/$1/$dep_ver/$td"; then
+                linkmerge "$deps_scratch_dir/$1/$dep_ver/$td" "$deps_dir/$td" "../$brew_dir_name/$1/$dep_ver/$td"
+            fi
+        done
+
+        rm -f "$deps_dir/opt/$1" && ln -s "../$brew_dir_name/$1/$dep_ver" "$deps_dir/opt/$1"
+
+        mv "$deps_scratch_dir/$1" "$brew_dir/$1"
     }
     
     if test -n "$missing_brew_deps"; then
         key_info "missing Wine dependencies; installing with built-in dependency fetcher"
-        pre_brew
 
         for d in $missing_brew_deps; do
-            minibrew "$d"
+            microbrew "$d"
         done
     fi
 
-    libinkq_dir="$ext_dir/libinotify-kqueue"
+    libinkq_dir="$(abspath "$ext_dir/libinotify-kqueue")"
 
     if test ! -d "$libinkq_dir"; then
         key_info "missing libinotify-kqueue; building from source"
-        pre_ext
-        pre_brew
 
-        minibrew "automake"
+        microbrew "automake"
+        microbrew "libtool"
 
         key_info "downloading libinotify-kqueue sources..."
         libinkq_url="https://api.github.com/repos/libinotify-kqueue/libinotify-kqueue/tarball/master"
 
-        libinkq_build_dir="$ext_scratch_dir/libinotify-kqueue"
+        libinkq_build_dir="$(abspath "$deps_scratch_dir/libinotify-kqueue")"
         test -d "$libinkq_build_dir" || mkdir "$libinkq_build_dir" || exite "failed to create $libinkq_build_dir"
 
         if curl -s -L "$libinkq_url" | tar -zx --strip-components=1 -C "$libinkq_build_dir"; then
             info "download + extract libinotify-kqueue sources successful"
+            key_info "building libinotify-kqueue..."
+
+            build_ncpu="$(if test "$is_macos" = 1; then
+                sysctl -n hw.logicalcpu
+            else
+                if command -v nproc > /dev/null; then
+                    nproc
+                fi
+            fi)"
+
+            if libinkq_log="$(cd "$libinkq_build_dir" && autoreconf -fvi 2>&1 && \
+                CFLAGS="${CFLAGS:+$CFLAGS }-target x86_64-apple-macos -arch x86_64" ./configure --prefix="$tmp_prefix" 2>&1 && \
+                make clean 2>&1 && make -j$build_ncpu 2>&1 && make install prefix="$tmp_prefix" DESTDIR="$libinkq_build_dir/build" 2>&1)"; then
+                info "libinotify-kqueue build log:\n\n%s\n\nlibinotify-kqueue build log end" "$libinkq_log"
+                key_info "libinotify-kqueue built successfully"
+            else
+                info "libinotify-kqueue build log:\n\n%s\n\nlibinotify-kqueue build log end" "$libinkq_log"
+                exite "failed to build libinotify-kqueue"
+            fi
+
+            mv "$libinkq_build_dir/build/$tmp_prefix" "$libinkq_dir"
+
+            for td in lib include share; do
+                linkmerge "$libinkq_dir/$td" "$deps_dir/$td" "../ext/libinotify-kqueue/$td"
+            done
         else
             exite "failed to download and extract libinotify-kqueue sources from $libinkq_url"
         fi
     fi
+
 else
     info "--no-deps specified; assuming dependencies are already available"
 fi
@@ -537,3 +799,5 @@ wineconf_args="--disable-option-checking --disable-tests --enable-archs=i386,x86
 # "$wine_dir"/configure $wineconf_args --prefix="$wine_build_dir"
 
 # TODO: which file?
+
+# TODO: set LDFLAGS=-Wl,ld_classic -Wl,-rpath,/some/path/here (/usr/local/lib)
