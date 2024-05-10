@@ -5,13 +5,21 @@
 
 set -e
 
-CXB_LOG_FILE="${CXB_LOG_FILE:-/dev/null}"
-CXB_TEMP="${CXB_TEMP:-.cxbuilder}"
+abspath() {
+    if test -d "$1"; then
+        echo "$(cd "$1" && pwd)"
+    else
+        echo "$(cd "$(dirname -- "$1")" && pwd)/$(basename "$1")"
+    fi
+}
+
+CXB_LOG_FILE="$(abspath "${CXB_LOG_FILE:-/dev/null}")"
 
 verbose=0
 is_macos=0; test "$(uname -s)" = "Darwin" && is_macos=1
 is_interactive=0; test -t 0 && is_interactive=1
 fetch_deps=1
+rebuild_wine=0
 wine_dir=
 use_gptk=
 use_dxvk=
@@ -21,6 +29,7 @@ source_dir=
 dst_dir=
 tmp_build=
 tmp_prefix=
+orig_cwd="$(pwd)"
 
 err() {
     out="$(fmt_lr "[error] " "\n" "$@"; printf ".")"
@@ -55,6 +64,14 @@ info() {
         eprint "$out"
     fi
     log_write "$out"   
+}
+
+extinfo() {
+    if test $verbose = 1; then
+        tee -a "$CXB_LOG_FILE" >&2
+    else
+        tee -a "$CXB_LOG_FILE" > /dev/null
+    fi
 }
 
 prompt_continue() {
@@ -131,6 +148,11 @@ usage() {
     eprintn "                         is well-tested and does not install anything globally"
     eprintn "                         into your system (not even Homebrew!)"
     eprintn ""
+    eprintn "    -r, --rebuild        Forcibly rebuilds Wine from source, ignoring cached or"
+    eprintn "                         partially built results. This option will need to be"
+    eprintn "                         specified after updating compiler/linker flags but"
+    eprintn "                         should generally be avoided otherwise."
+    eprintn ""
     eprintn "    -o, --out dest_dir   Where to generate the final Wine build. This directory"
     eprintn "                         will contain a similar structure to /usr/local (and"
     eprintn "                         that is indeed a valid value for this argument) after"
@@ -156,6 +178,7 @@ do
     --gptk) shift; use_gptk=1; gptk_dir="$1";;
     --dxvk) shift; use_dxvk=1; dxvk_dir="$1";;
     --no-deps) fetch_deps=0;;
+    -r|--rebuild) rebuild_wine=1;;
     -o|--out) shift; dst_dir="$1";;
     -*) eprintn "unknown argument $1"; usage; exit 1;;
     *)
@@ -177,6 +200,7 @@ cleanup() {
     if test ! -z "$tmp_prefix"; then
         rm "$tmp_prefix"
     fi
+    cd "$orig_cwd"
     trap - EXIT
     exit
 }
@@ -262,7 +286,7 @@ else
 fi
 
 dst_dir="${dst_dir:-$source_dir/build}"
-scratch_dir="$dst_dir/$CXB_TEMP"
+scratch_dir="${CXB_TEMP:-$dst_dir/.cxbuilder}"
 wine_dir="${wine_dir:-$source_dir/wine}"
 dxvk_dir="${dxvk_dir:-$source_dir/dxvk}"
 gptk_dir="${gptk_dir:-$source_dir/gptk}"
@@ -369,7 +393,7 @@ if ! test -d "$dst_dir"; then
 fi
 
 if ! test -d "$scratch_dir"; then
-    mkdir "$scratch_dir" 2> /dev/null || if tmp_build="$(mktemp -d 2> /dev/null)"; then
+    mkdir "$scratch_dir" 2> /dev/null || warn "failed to create $scratch_dir; creating a temporary build directory instead" && if tmp_build="$(mktemp -d 2> /dev/null)"; then
         scratch_dir="$tmp_build"
     else
         exite "failed to create CXBuilder tempdir $scratch_dir"
@@ -381,17 +405,6 @@ fi
 
 info "validation complete; starting build"
 
-mvk_dir="$scratch_dir/molten-vk"
-wine_build_dir="$scratch_dir/wine-build"
-
-abspath() {
-    if test -d "$1"; then
-        echo "$(cd "$1" && pwd)"
-    else
-        echo "$(cd "$(dirname -- "$1")" && pwd)/$(basename "$1")"
-    fi
-}
-
 get_inode() {
     ls -ldi -- "$1" | cut -d ' ' -f 1
 }
@@ -401,6 +414,14 @@ to_prec() {
     out_oversize="$((${#out} - $2 + 1))"
     echo "$out" | cut -c "$out_oversize-"
 }
+
+build_ncpu="$(if test "$is_macos" = 1; then
+    sysctl -n hw.logicalcpu
+else
+    if command -v nproc > /dev/null; then
+        nproc
+    fi
+fi)"
 
 if test $fetch_deps = 1; then
     for cmd in curl tar; do
@@ -484,7 +505,8 @@ if test $fetch_deps = 1; then
         if test $is_macos = 1; then
             osj_da='Object.defineProperty(Array.prototype, "sh", { get: function() { return this.join(" "); } });'
             osj_parse='var data = JSON.parse($.NSProcessInfo.processInfo.environment.objectForKey("json").js);'
-            json="$2" /usr/bin/osascript -l 'JavaScript' -e "$osj_da" -e "$osj_parse" -e "var res = data$1; typeof res == 'string' ? res : res == null ? undefined : JSON.stringify(res)" 2> /dev/null
+            json="$2" /usr/bin/osascript -l 'JavaScript' -e "$osj_da" -e "$osj_parse" \
+                -e "var res = data$1; typeof res == 'string' ? res : res == null ? undefined : JSON.stringify(res)" 2> /dev/null
         else
             builtin_py="$(command -v python)" || builtin_py="$(command -v python3)" || \
                 exite "cannot locate Python; please install Python to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
@@ -685,7 +707,11 @@ if test $fetch_deps = 1; then
                     fi
                     # todo: what if directory is not writable?
                     case "$(file "$tmp_write")" in
-                    *text*) rm -f "$f"; sed -e "s%@@HOMEBREW_CELLAR@@%$tmp_prefix/$brew_dir_name%g" -e "s%@@HOMEBREW_PREFIX@@%$tmp_prefix%g" -e "s%@@HOMEBREW_PERL@@%/usr/bin/perl%g" "$tmp_write" > "$f"; rm "$tmp_write"; chmod "$f_perm" "$f";;
+                    *text*)
+                        rm -f "$f"
+                        sed -e "s%@@HOMEBREW_CELLAR@@%$tmp_prefix/$brew_dir_name%g" -e "s%@@HOMEBREW_PREFIX@@%$tmp_prefix%g" -e "s%@@HOMEBREW_PERL@@%/usr/bin/perl%g" "$tmp_write" > "$f"
+                        rm "$tmp_write"
+                        chmod "$f_perm" "$f";;
                     *) mv -f "$tmp_write" "$f"; chmod "$f_perm" "$f";;
                     esac
 
@@ -740,7 +766,7 @@ if test $fetch_deps = 1; then
 
     libinkq_dir="$(abspath "$ext_dir/libinotify-kqueue")"
 
-    if test ! -d "$libinkq_dir"; then
+    if test $is_macos = 1 && test ! -d "$libinkq_dir"; then
         key_info "missing libinotify-kqueue; building from source"
 
         microbrew "automake"
@@ -756,25 +782,21 @@ if test $fetch_deps = 1; then
             info "download + extract libinotify-kqueue sources successful"
             key_info "building libinotify-kqueue..."
 
-            build_ncpu="$(if test "$is_macos" = 1; then
-                sysctl -n hw.logicalcpu
-            else
-                if command -v nproc > /dev/null; then
-                    nproc
-                fi
-            fi)"
-
-            if libinkq_log="$(cd "$libinkq_build_dir" && autoreconf -fvi 2>&1 && \
-                CFLAGS="${CFLAGS:+$CFLAGS }-target x86_64-apple-macos -arch x86_64" ./configure --prefix="$tmp_prefix" 2>&1 && \
-                make clean 2>&1 && make -j$build_ncpu 2>&1 && make install prefix="$tmp_prefix" DESTDIR="$libinkq_build_dir/build" 2>&1)"; then
-                info "libinotify-kqueue build log:\n\n%s\n\nlibinotify-kqueue build log end" "$libinkq_log"
+            rm -f "$libinkq_build_dir/.cxb-success"
+            info "libinotify-kqueue build log:"
+            (
+                cd "$libinkq_build_dir" && autoreconf -fvi 2>&1 && \
+                CFLAGS="${CFLAGS:+$CFLAGS }-target x86_64-apple-macos -arch x86_64" ./configure --prefix="$tmp_prefix" 2>&1 && make clean 2>&1 && \
+                make -j$build_ncpu 2>&1 && make install prefix="$tmp_prefix" DESTDIR="$libinkq_build_dir/build" 2>&1 && touch "$libinkq_build_dir/.cxb-success"
+            ) | extinfo
+            if test -f "$libinkq_build_dir/.cxb-success"; then
+                rm "$libinkq_build_dir/.cxb-success"
                 key_info "libinotify-kqueue built successfully"
             else
-                info "libinotify-kqueue build log:\n\n%s\n\nlibinotify-kqueue build log end" "$libinkq_log"
                 exite "failed to build libinotify-kqueue"
             fi
 
-            mv "$libinkq_build_dir/build/$tmp_prefix" "$libinkq_dir"
+            mv "$libinkq_build_dir/build$tmp_prefix" "$libinkq_dir"
 
             for td in lib include share; do
                 linkmerge "$libinkq_dir/$td" "$deps_dir/$td" "../ext/libinotify-kqueue/$td"
@@ -783,21 +805,107 @@ if test $fetch_deps = 1; then
             exite "failed to download and extract libinotify-kqueue sources from $libinkq_url"
         fi
     fi
-
 else
     info "--no-deps specified; assuming dependencies are already available"
 fi
 
-wineconf_args="--disable-option-checking --disable-tests --enable-archs=i386,x86_64 --without-alsa \
---without-capi --with-coreaudio --with-cups --without-dbus --without-fontconfig --with-freetype \
---with-gettext --without-gettextpo --without-gphoto --with-gnutls --without-gssapi --with-gstreamer \
---with-inotify --without-krb5 --with-mingw  --without-netapi --with-opencl --with-opengl --without-oss \
---with-pcap --with-pcsclite --with-pthread --without-pulse --without-sane --with-sdl --without-udev \
---with-unwind --without-usb --without-v4l2 --with-vulkan --without-wayland --without-x $CXB_CONF_ARGS"
+key_info "dependencies located; starting build"
 
+ld_rel_name=
+if test $is_macos = 1; then
+    ld_rel_name='@loader_path'
+else
+    ld_rel_name='$ORIGIN'
+fi
 
-# "$wine_dir"/configure $wineconf_args --prefix="$wine_build_dir"
+wine_abs_conf_dir="$(abspath "$scratch_dir/wine")"
+wine_abs_link_dir="$wine_abs_conf_dir/src"
+wine_abs_build_dir="$wine_abs_conf_dir/build"
+wine_abs_dist_dir="$wine_abs_conf_dir/dist"
+wine_abs_include_dir="$wine_abs_build_dir/include"
+wine_abs_dir="$(abspath "$wine_dir")"
 
+build_wine() {
+    wineconf_args="--disable-option-checking --disable-tests --enable-archs=i386,x86_64 --without-alsa \
+    --without-capi --with-coreaudio --with-cups --without-dbus --without-fontconfig --with-freetype \
+    --with-gettext --without-gettextpo --without-gphoto --with-gnutls --without-gssapi --with-gstreamer \
+    --with-inotify --without-krb5 --with-mingw  --without-netapi --with-opencl --with-opengl --without-oss \
+    --with-pcap --with-pcsclite --with-pthread --without-pulse --without-sane --with-sdl --without-udev \
+    --with-unwind --without-usb --without-v4l2 --with-vulkan --without-wayland --without-x $CXB_CONF_ARGS"
+
+    for d in "$wine_abs_conf_dir" "$wine_abs_build_dir" "$wine_abs_include_dir"; do
+        if test ! -d "$d"; then
+            mkdir "$d" || exite "failed to create $d"
+        fi
+    done
+
+    rm -f "$wine_abs_link_dir" && ln -s "$wine_abs_dir" "$wine_abs_link_dir" || exite "failed to symlink $wine_abs_dir to $wine_abs_link_dir"
+
+    if test ! -f "$wine_abs_include_dir/distversion.h"; then
+        printf '%s%s\n%s%s%s\n' \
+            '#define WINDEBUG_WHAT_HAPPENED_MESSAGE "This can be caused by a problem in the program or a deficiency in Wine. ' \
+            'You may want to check <a href=\"http://www.codeweavers.com/compatibility/\">http://www.codeweavers.com/compatibility/</a> for tips about running this application."' \
+            '#define WINDEBUG_USER_SUGGESTION_MESSAGE "If this problem is not present under Windows and has not been reported yet, ' \
+            'you can save the detailed information to a file using the \"Save As\" button, then <a href=\"http://www.codeweavers.com/support/tickets/enter/\">file a bug report</a> ' \
+            'and attach that file to the report."' \
+        > "$wine_abs_include_dir/distversion.h"
+    fi
+
+    cd "$wine_abs_build_dir"
+
+    export CFLAGS="-Wno-deprecated-declarations -Wno-incompatible-pointer-types${CFLAGS:+ $CFLAGS}"
+    export LDFLAGS="-Wl,-ld_classic -Wl,-headerpad_max_install_names -Wl,-rpath,$ld_rel_name/../..${LDFLAGS:+ $LDFLAGS}"
+
+    key_info "configuring Wine..."
+    if test -f "Makefile" && test $rebuild_wine = 0; then
+        info "found previous build; reusing configured results"
+    else
+        if test -f "Makefile"; then
+            info "found previous build; cleaning"
+            (make clean && touch ".cxb-success") | extinfo
+            if test -f ".cxb-success"; then
+                info "successfully cleaned previous build"
+                rm ".cxb-success"
+            else
+                exite "failed to clean previous build"
+            fi
+            
+            rm "Makefile"
+        fi
+        
+        # makedep expects distversion.h in parent directory for some reason
+        rm -f "$wine_abs_conf_dir/distversion.h" && ln -s "$wine_abs_include_dir/distversion.h" "$wine_abs_conf_dir/distversion.h" || exite "failed to symlink distversion.h"
+
+        if test $is_apple_silicon = 1; then
+            (arch -x86_64 "$wine_abs_link_dir"/configure $wineconf_args --verbose 2>&1 && touch ".cxb-success") | extinfo
+        else
+            ("$wine_abs_link_dir"/configure $wineconf_args 2>&1 && touch ".cxb-success") | extinfo
+        fi
+        
+        test -f ".cxb-success" && rm ".cxb-success" || exite "failed to configure Wine"
+        rm -f "$wine_abs_conf_dir/distversion.h"
+    fi
+    
+    key_info "building Wine... (this will take a while)"
+    if test $is_apple_silicon = 1; then
+        (arch -x86_64 make -j$build_ncpu 2>&1 && touch ".cxb-success") | extinfo
+    else
+        (make -j$build_ncpu 2>&1 && touch ".cxb-success") | extinfo
+    fi
+    test -f ".cxb-success" && rm ".cxb-success" || exite "failed to build Wine"
+
+    if test $is_apple_silicon = 1; then
+        (arch -x86_64 make -j$build_ncpu install-lib prefix="$tmp_prefix" DESTDIR="$wine_abs_build_dir/dist" 2>&1 && touch ".cxb-success") | extinfo
+    else
+        (make -j$build_ncpu install-lib prefix="$tmp_prefix" DESTDIR="$wine_abs_build_dir/dist" 2>&1 && touch ".cxb-success") | extinfo
+    fi
+    test -f ".cxb-success" && rm ".cxb-success" || exite "failed to build Wine"
+
+    rm -rf "$wine_abs_dist_dir"
+    mv "$wine_abs_build_dir/dist$tmp_prefix" "$wine_abs_dist_dir"
+
+    key_info "Wine built successfully"
+}
+
+(build_wine)
 # TODO: which file?
-
-# TODO: set LDFLAGS=-Wl,ld_classic -Wl,-rpath,/some/path/here (/usr/local/lib)
