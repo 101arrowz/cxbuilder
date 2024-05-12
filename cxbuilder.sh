@@ -5,11 +5,18 @@
 
 set -e
 
+reset_ifs() {
+    IFS=' 	
+'
+}
+
+reset_ifs
+
 abspath() {
     if test -d "$1"; then
         echo "$(cd "$1" && pwd)"
     else
-        echo "$(cd "$(dirname -- "$1")" && pwd)/$(basename "$1")"
+        echo "$(cd "$(dirname -- "$1")" && pwd)/$(basename -- "$1")"
     fi
 }
 
@@ -20,6 +27,7 @@ is_macos=0; test "$(uname -s)" = "Darwin" && is_macos=1
 is_interactive=0; test -t 0 && is_interactive=1
 fetch_deps=1
 rebuild_wine=0
+post_clean="$(test -z "$CXB_TEMP" && echo 1 || echo 0)"
 wine_dir=
 use_gptk=
 use_dxvk=
@@ -29,7 +37,6 @@ source_dir=
 dst_dir=
 tmp_build=
 tmp_prefix=
-orig_cwd="$(pwd)"
 
 err() {
     out="$(fmt_lr "[error] " "\n" "$@"; printf ".")"
@@ -99,7 +106,7 @@ fmt_lr() {
 }
 
 eprint() { printf "%s" "$1" >&2; }
-eprintn() { printf "%s" "$1" >&2; }
+eprintn() { printf "%s\n" "$1" >&2; }
 log_write() { printf "%s" "$1" >> "$CXB_LOG_FILE"; }
 
 usage() {
@@ -166,8 +173,7 @@ usage() {
     eprintn "                         be used to create a build with only one argument."
 }
 
-while test $# != 0
-do
+while test $# != 0; do
     case "$1" in
     -h|--help) usage; exit 0;;
     -v|--verbose) verbose=1;;
@@ -200,7 +206,7 @@ cleanup() {
     if test ! -z "$tmp_prefix"; then
         rm "$tmp_prefix"
     fi
-    cd "$orig_cwd"
+    reset_ifs
     trap - EXIT
     exit
 }
@@ -226,7 +232,7 @@ else
 fi
 
 if test -z $use_gptk; then
-    info "gptk options unspecified; $(test $is_apple_silicon = 1 && echo "enabling by default on Apple Silicon" || echo "disabling by default (not on Applle Silicon)")"
+    info "gptk options unspecified; $(test $is_apple_silicon = 1 && echo "enabling by default on Apple Silicon" || echo "disabling by default (not on Apple Silicon)")"
     use_gptk=$is_apple_silicon
 fi
 
@@ -276,22 +282,22 @@ if test -z "$source_dir"; then
 else
     source_dir_err="cannot use source directory $source_dir"
 
-    if ! test -e "$source_dir"; then
+    if test ! -e "$source_dir"; then
         exite "%s; does not exist" "$source_dir_err"
     fi
 
-    if ! test -d "$source_dir"; then
+    if test ! -d "$source_dir"; then
         exite "%s; not a directory" "$source_dir_err"
     fi
 fi
 
-dst_dir="${dst_dir:-$source_dir/build}"
-scratch_dir="${CXB_TEMP:-$dst_dir/.cxbuilder}"
-wine_dir="${wine_dir:-$source_dir/wine}"
-dxvk_dir="${dxvk_dir:-$source_dir/dxvk}"
-gptk_dir="${gptk_dir:-$source_dir/gptk}"
+dst_dir="$(abspath "${dst_dir:-$source_dir/build}")"
+scratch_dir="$(abspath "${CXB_TEMP:-$dst_dir/.cxbuilder}")"
+wine_dir="$(abspath "${wine_dir:-$source_dir/wine}")"
+dxvk_dir="$(abspath "${dxvk_dir:-$source_dir/dxvk}")"
+gptk_dir="$(abspath "${gptk_dir:-$source_dir/gptk}")"
 
-info "using wine from $wine_dir"
+info "using wine from %s" "$wine_dir"
 
 wine_err="cannot load wine from $wine_dir"
 
@@ -307,10 +313,10 @@ if test ! -f "$wine_dir/configure"; then
     exite "%s; could not locate configure script"
 fi
 
-info "$wine_dir has valid Wine sources"
+info "%s has valid Wine sources" "$wine_dir"
 
 if test $use_gptk = 1; then
-    info "using gptk from $gptk_dir"
+    info "using gptk from %s" "$gptk_dir"
 
     gptk_err="cannot load GPTk from $gptk_dir"
 
@@ -322,25 +328,23 @@ if test $use_gptk = 1; then
         exite "%s; not a directory" "$gptk_err"
     fi
 
-    gptk_paths="/redist/lib/external/D3DMetal.framework /redist/lib/external/libd3dshared.dylib \
-                /redist/lib/wine/x86_64-windows/d3d9.dll /redist/lib/wine/x86_64-windows/d3d10.dll \
-                /redist/lib/wine/x86_64-windows/d3d11.dll /redist/lib/wine/x86_64-windows/d3d12.dll \
-                /redist/lib/wine/x86_64-windows/dxgi.dll"
+    gptk_paths="/redist/lib/external/D3DMetal.framework /redist/lib/external/libd3dshared.dylib /redist/lib/wine/x86_64-windows/d3d9.dll /redist/lib/wine/x86_64-windows/d3d10.dll \
+                /redist/lib/wine/x86_64-windows/d3d11.dll /redist/lib/wine/x86_64-windows/d3d12.dll /redist/lib/wine/x86_64-windows/dxgi.dll"
 
     for p in $gptk_paths; do
         if test ! -e "$gptk_dir$p"; then
-            err "%s; could not locate $gptk_dir$p" "$gptk_err"
+            err "%s; could not locate %s" "$gptk_err" "$gptk_dir$p"
             exit 1
         fi
     done
 
-    info "$gptk_dir has a valid GPTk redistributable"
+    info "%s has a valid GPTk redistributable" "$gptk_dir"
 else
     info "not using gptk"
 fi
 
 if test $use_dxvk = 1; then
-    info "using dxvk from $dxvk_dir"
+    info "using dxvk from %s" "$dxvk_dir"
 
     dxvk_err="cannot load DXVK from $dxvk_dir"
 
@@ -352,8 +356,7 @@ if test $use_dxvk = 1; then
         exite "%s; not a directory" "$dxvk_err"
     fi
 
-    dxvk_paths="/x32/d3d9.dll /x32/d3d10core.dll /x32/d3d11.dll /x32/dxgi.dll \
-                /x64/d3d9.dll /x64/d3d10core.dll /x64/d3d11.dll /x64/dxgi.dll"
+    dxvk_paths="/x32/d3d9.dll /x32/d3d10core.dll /x32/d3d11.dll /x32/dxgi.dll /x64/d3d9.dll /x64/d3d10core.dll /x64/d3d11.dll /x64/dxgi.dll"
 
     missing_dxvk_paths=
     any_dxvk_path=0
@@ -366,47 +369,53 @@ if test $use_dxvk = 1; then
     done
 
     if test -n "$missing_dxvk_paths"; then
-        warn "missing the following DXVK DLLs: $missing_dxvk_paths"
+        warn "missing the following DXVK DLLs: %s" "$missing_dxvk_paths"
         if test $any_dxvk_path = 0; then
             exite "%s; no DXVK DLLs found" "$dxvk_err"
         fi
         prompt_continue "The provided DVXK build seems incomplete. Continue?"
     fi
 
-    info "$dxvk_dir has a valid DXVK build"
+    info "%s has a valid DXVK build" "$dxvk_dir"
 else
     info "not using dxvk"
 fi
 
-if ! test -d "$dst_dir"; then
-    info "creating build directory $dst_dir"
+if test ! -d "$dst_dir"; then
+    info "creating build directory %s" "$dst_dir"
 
     if test -e "$dst_dir"; then
-        exite "failed to create $dst_dir; path exists"
+        exite "failed to create %s; path exists" "$dst_dir"
     fi
 
     if mkdir "$dst_dir" 2> /dev/null; then
-        info "successfully created $dst_dir"
+        info "successfully created %s" "$dst_dir"
     else
-        exite "failed to create $dst_dir"
+        exite "failed to create %s" "$dst_dir"
     fi
 fi
 
-if ! test -d "$scratch_dir"; then
-    mkdir "$scratch_dir" 2> /dev/null || warn "failed to create $scratch_dir; creating a temporary build directory instead" && if tmp_build="$(mktemp -d 2> /dev/null)"; then
+if test ! -d "$scratch_dir"; then
+    mkdir "$scratch_dir" 2> /dev/null || warn "failed to create %s; creating a temporary build directory instead" "$scratch_dir" && if tmp_build="$(mktemp -d 2> /dev/null)"; then
         scratch_dir="$tmp_build"
     else
-        exite "failed to create CXBuilder tempdir $scratch_dir"
+        exite "failed to create CXBuilder tempdir %s" "$scratch_dir"
     fi
-    info "successfully created $scratch_dir"
+    info "successfully created %s" "$scratch_dir"
 else
-    info "located previous CXBuilder run in $scratch_dir"
+    info "located previous CXBuilder run in %s" "$scratch_dir"
 fi
 
 info "validation complete; starting build"
 
 get_inode() {
     ls -ldi -- "$1" | cut -d ' ' -f 1
+}
+
+get_link() {
+    # TODO: breaks if you have -> in username
+    # at that point you had it coming though
+    ls -l -- "$1" | awk -F " -> " '{print $2}'
 }
 
 to_prec() {
@@ -425,7 +434,7 @@ fi)"
 
 if test $fetch_deps = 1; then
     for cmd in curl tar; do
-        command -v $cmd > /dev/null || exite "cannot locate $cmd; please install $cmd to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
+        command -v $cmd > /dev/null || exite "cannot locate %s; please install %s to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself" "$cmd" "$cmd"
     done
 
     if test $is_macos = 0; then
@@ -441,14 +450,12 @@ if test $fetch_deps = 1; then
     ext_dir="$deps_dir/ext"
 
     for d in "$deps_dir" "$deps_dir/bin" "$deps_dir/lib" "$deps_dir/include" "$deps_dir/opt" "$deps_dir/share" "$deps_dl_dir" "$deps_scratch_dir" "$brew_dir" "$ext_dir"; do
-        test -d "$d" || mkdir "$d" 2> /dev/null || exite "failed to create $d"
+        test -d "$d" || mkdir "$d" 2> /dev/null || exite "failed to create %s" "$d"
     done
 
-    abs_deps_dir="$(abspath "$deps_dir")"
-
-    export PATH="$abs_deps_dir/bin:${PATH:+:$PATH}"
-    export CPATH="$abs_deps_dir/include${CPATH:+:$CPATH}"
-    export LIBRARY_PATH="$abs_deps_dir/lib:${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    export PATH="$deps_dir/bin${PATH:+:$PATH}"
+    export CPATH="$deps_dir/include${CPATH:+:$CPATH}"
+    export LIBRARY_PATH="$deps_dir/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 
     scratch_dir_inode="$(get_inode "$scratch_dir")"
     brew_default_prefix=
@@ -462,7 +469,7 @@ if test $fetch_deps = 1; then
     # length must exactly match length of default platform prefix!
     tmp_prefix="/tmp/cx$(to_prec "$scratch_dir_inode" "$((${#brew_default_prefix} - 7))")"
 
-    rm -f "$tmp_prefix" && ln -s "$abs_deps_dir" "$tmp_prefix" || exite "failed to symlink $tmp_prefix to $abs_deps_dir"
+    rm -f "$tmp_prefix" && ln -s "$deps_dir" "$tmp_prefix" || exite "failed to symlink %s to %s" "$tmp_prefix" "$deps_dir"
  
     tmp_prefix_file="$deps_dir/.tmp-prefix"
     if test ! -e "$tmp_prefix_file" || test "$tmp_prefix" != "$(cat "$tmp_prefix_file" 2> /dev/null || echo)"; then
@@ -522,7 +529,7 @@ if test $fetch_deps = 1; then
     build_sys_info="$sys_info"
 
     if test $is_macos = 1; then
-        case "$(/usr/bin/sw_vers -productVersion)" in
+        case "$(sw_vers -productVersion)" in
             14.*) sys_info="sonoma";;
             13.*) sys_info-"ventura";;
             12.*) sys_info="monterey";;
@@ -536,18 +543,12 @@ if test $fetch_deps = 1; then
         fi
     fi
 
-    get_link() {
-        # TODO: breaks if you have -> in username
-        # at that point you had it coming though
-        ls -l -- "$1" | awk -F " -> " '{print $2}'
-    }
-
     linkmerge() {
         for f in "$1"/*; do
             tgt_name="${f#"$1/"}"
             prev_name="$2/$tgt_name"
             if test -d "$prev_name"; then
-                test -d "$f" || exite "$f is not a directory"
+                test -d "$f" || exite "%s is not a directory" "$f"
                 if test -L "$prev_name"; then
                     if test -d "$deps_scratch_dir/.cxb-link"; then
                         rm "$deps_scratch_dir/.cxb-link"/*
@@ -576,7 +577,7 @@ if test $fetch_deps = 1; then
                 esac
                 linkmerge "$f" "$prev_name" "$new_dst_link/$tgt_name"
             else
-                rm -f "$prev_name" && ln -s "$3/$tgt_name" "$prev_name" || exite "could not symlink $3/$tgt_name to $prev_name"
+                rm -f "$prev_name" && ln -s "$3/$tgt_name" "$prev_name" || exite "could not symlink %s to %s" "$3/$tgt_name" "$prev_name"
             fi
         done
     }
@@ -585,27 +586,28 @@ if test $fetch_deps = 1; then
     # TODO: support multiple architectures (i.e. consider $build_sys_info for build-time dependencies)
     microbrew() {
         if test -d "$brew_dir/$1"; then
-            info "package $1 already installed; skipping"
+            info "package %s already installed; skipping" "$1"
             return
         fi
 
+        info "downloading info for %s..." "$1"
         info_url="https://formulae.brew.sh/api/formula/$1.json"
         info_json="$(curl -s "$info_url")"
 
         info_bottle="$(sh_json .bottle.stable "$info_json")"
-        test -z "$info_bottle" && exite "failed to load bottle info for $1"
+        test -z "$info_bottle" && exite "failed to load bottle info for %s" "$1"
         
         info_bottle_arch="$(sh_json ".files.$sys_info" "$info_bottle")"
         if test -z "$info_bottle_arch"; then
             info_bottle_arch="$(sh_json ".files.all" "$info_bottle")"
         fi
-        test -z "$info_bottle_arch" && exite "failed to load bottle info for $1, system type $sys_info"
+        test -z "$info_bottle_arch" && exite "failed to load bottle info for %s, system type %s" "$1" "$sys_info"
 
         info_bottle_url="$(sh_json ".url" "$info_bottle_arch")"
         info_bottle_sha="$(sh_json ".sha256" "$info_bottle_arch")"
 
-        info "fetching $1 from $info_bottle_url (sha = $info_bottle_sha)"
-        key_info "downloading $1..."
+        info "fetching %s from %s (sha = %s)" "$1" "$info_bottle_url" "$info_bottle_sha"
+        key_info "downloading %s..." "$1"
 
         curl_extra_opts="-s"
         if test $verbose = 1; then
@@ -613,18 +615,18 @@ if test $fetch_deps = 1; then
         fi
 
         if curl $curl_extra_opts -g -H "Authorization: Bearer QQ==" -L  -o "$deps_dl_dir/$info_bottle_sha" -C - "$info_bottle_url"; then
-            info "download $1 successful; extracting"
+            info "download %s successful; extracting" "$1"
         else
-            exite "failed to download $1 from $info_bottle_url"
+            exite "failed to download %s from %s" "$1" "$info_bottle_url"
         fi
 
         if tar -zxf "$deps_dl_dir/$info_bottle_sha" -C "$deps_scratch_dir"; then
-            info "extracting $1 successful"
+            info "extracting %s successful" "$1"
         else
-            exite "failed to extract $1 from $deps_dl_dir/$info_bottle_sha to $deps_scratch_dir"
+            exite "failed to extract %s from %s to %s" "$1" "$deps_dl_dir/$info_bottle_sha" "$deps_scratch_dir"
         fi
         
-        key_info "patching $1..."
+        key_info "patching %s..." "$1"
         progress_file="$deps_scratch_dir/.patch-progress"
         LC_ALL=C find "$deps_scratch_dir/$1" -type f -exec sh -e -c '
             brew_default_prefix="$1"
@@ -670,13 +672,13 @@ if test $fetch_deps = 1; then
 
                 # common case: no processing needed
                 f_patch=0
-                if grep -q -e "@@HOMEBREW" "$f"; then
+                if grep -q -F -e "@@HOMEBREW" -e "$brew_default_prefix" "$f"; then
                     f_patch=1
                 fi
                 f_rel="${f#"$deps_scratch_dir"}"
 
                 if test $f_patch = 0; then
-                    if file "$f" | grep -q "Mach-O"; then
+                    if file "$f" | grep -q -F "Mach-O"; then
                         if install_name_tool -id "$tmp_prefix/$brew_dir_name$f_rel" "$f" 2> /dev/null; then
                             f_perm=$(get_perm "$f")
                             chmod 644 "$f"
@@ -692,7 +694,7 @@ if test $fetch_deps = 1; then
                     need_sign=0
                     if install_name_tool -id "$tmp_prefix/$brew_dir_name$f_rel" "$tmp_write" 2> /dev/null; then
                         need_sign=1
-                        f_names=$(otool -L "$f" | grep -e "@@HOMEBREW" | awk '\''
+                        f_names=$(otool -L "$f" | grep -F "@@HOMEBREW" | awk '\''
                             /@@HOMEBREW_CELLAR@@/ || /@@HOMEBREW_PREFIX@@/ {
                                 ORS=" "
                                 a=$1
@@ -729,12 +731,12 @@ if test $fetch_deps = 1; then
             echo "patched $num_f files"
         fi
 
-        info "successfully patched $1: $num_f files"
+        info "successfully patched %s: %i files" "$1" "$num_f"
 
         info_deps="$(sh_json .dependencies.sh "$info_json")"
         
         if test -n "$info_deps"; then
-            info "$1 depends on: $info_deps"
+            info "%s depends on: %s" "$1" "$info_deps"
         fi
 
         for d in $info_deps; do
@@ -743,7 +745,7 @@ if test $fetch_deps = 1; then
         
         dep_ver="$(ls "$deps_scratch_dir/$1")"
 
-        info "linking $1 into $deps_dir"
+        info "linking %s into %s" "$1" "$deps_dir"
         # TODO: use the metadata from Homebrew for this
         for td in bin lib include share; do
             if test -d "$deps_scratch_dir/$1/$dep_ver/$td"; then
@@ -764,7 +766,7 @@ if test $fetch_deps = 1; then
         done
     fi
 
-    libinkq_dir="$(abspath "$ext_dir/libinotify-kqueue")"
+    libinkq_dir="$ext_dir/libinotify-kqueue"
 
     if test $is_macos = 1 && test ! -d "$libinkq_dir"; then
         key_info "missing libinotify-kqueue; building from source"
@@ -775,8 +777,8 @@ if test $fetch_deps = 1; then
         key_info "downloading libinotify-kqueue sources..."
         libinkq_url="https://api.github.com/repos/libinotify-kqueue/libinotify-kqueue/tarball/master"
 
-        libinkq_build_dir="$(abspath "$deps_scratch_dir/libinotify-kqueue")"
-        test -d "$libinkq_build_dir" || mkdir "$libinkq_build_dir" || exite "failed to create $libinkq_build_dir"
+        libinkq_build_dir="$deps_scratch_dir/libinotify-kqueue"
+        test -d "$libinkq_build_dir" || mkdir "$libinkq_build_dir" || exite "failed to create %s" "$libinkq_build_dir"
 
         if curl -s -L "$libinkq_url" | tar -zx --strip-components=1 -C "$libinkq_build_dir"; then
             info "download + extract libinotify-kqueue sources successful"
@@ -787,23 +789,46 @@ if test $fetch_deps = 1; then
             (
                 cd "$libinkq_build_dir" && autoreconf -fvi 2>&1 && \
                 CFLAGS="${CFLAGS:+$CFLAGS }-target x86_64-apple-macos -arch x86_64" ./configure --prefix="$tmp_prefix" 2>&1 && make clean 2>&1 && \
-                make -j$build_ncpu 2>&1 && make install prefix="$tmp_prefix" DESTDIR="$libinkq_build_dir/build" 2>&1 && touch "$libinkq_build_dir/.cxb-success"
+                make -j$build_ncpu 2>&1 && make install prefix="/" DESTDIR="$libinkq_dir" 2>&1 && touch "$libinkq_build_dir/.cxb-success"
             ) | extinfo
             if test -f "$libinkq_build_dir/.cxb-success"; then
                 rm "$libinkq_build_dir/.cxb-success"
-                key_info "libinotify-kqueue built successfully"
             else
                 exite "failed to build libinotify-kqueue"
             fi
 
-            mv "$libinkq_build_dir/build$tmp_prefix" "$libinkq_dir"
-
             for td in lib include share; do
                 linkmerge "$libinkq_dir/$td" "$deps_dir/$td" "../ext/libinotify-kqueue/$td"
             done
+            key_info "libinotify-kqueue built successfully"
         else
-            exite "failed to download and extract libinotify-kqueue sources from $libinkq_url"
+            exite "failed to download and extract libinotify-kqueue sources from %s" "$libinkq_url"
         fi
+    fi
+
+    macos_pkgconfig_dir="$ext_dir/macos-pkgconfig"
+    if test $is_macos = 1; then
+        if test ! -d "$macos_pkgconfig_dir"; then
+            key_info "missing pkgconfig files for macOS builtins; downloading from Homebrew"
+
+            macos_pkgconfig_fetch_dir="$deps_scratch_dir/macos-pkgconfig"
+
+            test -d "$macos_pkgconfig_fetch_dir" || mkdir "$macos_pkgconfig_fetch_dir" || exite "failed to create %s" "$macos_pkgconfig_fetch_dir"
+            macos_pkgconfig_url="https://github.com/Homebrew/brew/tarball/master"
+
+            curl -s -L "$macos_pkgconfig_url" | tar -zx --strip-components=6 -C "$macos_pkgconfig_fetch_dir" '*/Library/Homebrew/os/mac/pkgconfig' 2> /dev/null || \
+                exite "failed to download pkgcconfig files for macOS builtins"
+
+            mv "$macos_pkgconfig_fetch_dir" "$macos_pkgconfig_dir"
+        fi
+
+        macos_ver="$(sw_vers -productVersion)"
+        case "$macos_ver" in
+            10.*)macos_subver="${macos_ver#*.}"; macos_ver="${macos_ver%%.*}.${macos_subver%%.*}";;
+            *) macos_ver="${macos_ver%%.*}";;
+        esac
+
+        export PKG_CONFIG_PATH="$tmp_prefix/lib/pkgconfig:$tmp_prefix/share/pkgconfig:$macos_pkgconfig_dir/$macos_ver${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     fi
 else
     info "--no-deps specified; assuming dependencies are already available"
@@ -818,14 +843,14 @@ else
     ld_rel_name='$ORIGIN'
 fi
 
-wine_abs_conf_dir="$(abspath "$scratch_dir/wine")"
-wine_abs_link_dir="$wine_abs_conf_dir/src"
-wine_abs_build_dir="$wine_abs_conf_dir/build"
-wine_abs_dist_dir="$wine_abs_conf_dir/dist"
-wine_abs_include_dir="$wine_abs_build_dir/include"
-wine_abs_dir="$(abspath "$wine_dir")"
+wine_conf_dir="$scratch_dir/wine"
+wine_link_dir="$wine_conf_dir/src"
+wine_build_dir="$wine_conf_dir/build"
+wine_dist_dir="$wine_conf_dir/dist"
+wine_include_dir="$wine_build_dir/include"
 
 build_wine() {
+    # TODO: make non-macOS specific
     wineconf_args="--disable-option-checking --disable-tests --enable-archs=i386,x86_64 --without-alsa \
     --without-capi --with-coreaudio --with-cups --without-dbus --without-fontconfig --with-freetype \
     --with-gettext --without-gettextpo --without-gphoto --with-gnutls --without-gssapi --with-gstreamer \
@@ -833,25 +858,25 @@ build_wine() {
     --with-pcap --with-pcsclite --with-pthread --without-pulse --without-sane --with-sdl --without-udev \
     --with-unwind --without-usb --without-v4l2 --with-vulkan --without-wayland --without-x $CXB_CONF_ARGS"
 
-    for d in "$wine_abs_conf_dir" "$wine_abs_build_dir" "$wine_abs_include_dir"; do
+    for d in "$wine_conf_dir" "$wine_build_dir" "$wine_include_dir"; do
         if test ! -d "$d"; then
-            mkdir "$d" || exite "failed to create $d"
+            mkdir "$d" || exite "failed to create %s" "$d"
         fi
     done
 
-    rm -f "$wine_abs_link_dir" && ln -s "$wine_abs_dir" "$wine_abs_link_dir" || exite "failed to symlink $wine_abs_dir to $wine_abs_link_dir"
+    rm -f "$wine_link_dir" && ln -s "$wine_dir" "$wine_link_dir" || exite "failed to symlink %s to %s" "$wine_dir" "$wine_link_dir"
 
-    if test ! -f "$wine_abs_include_dir/distversion.h"; then
+    if test ! -f "$wine_include_dir/distversion.h"; then
         printf '%s%s\n%s%s%s\n' \
             '#define WINDEBUG_WHAT_HAPPENED_MESSAGE "This can be caused by a problem in the program or a deficiency in Wine. ' \
             'You may want to check <a href=\"http://www.codeweavers.com/compatibility/\">http://www.codeweavers.com/compatibility/</a> for tips about running this application."' \
             '#define WINDEBUG_USER_SUGGESTION_MESSAGE "If this problem is not present under Windows and has not been reported yet, ' \
             'you can save the detailed information to a file using the \"Save As\" button, then <a href=\"http://www.codeweavers.com/support/tickets/enter/\">file a bug report</a> ' \
             'and attach that file to the report."' \
-        > "$wine_abs_include_dir/distversion.h"
+        > "$wine_include_dir/distversion.h"
     fi
 
-    cd "$wine_abs_build_dir"
+    cd "$wine_build_dir"
 
     export CFLAGS="-Wno-deprecated-declarations -Wno-incompatible-pointer-types${CFLAGS:+ $CFLAGS}"
     export LDFLAGS="-Wl,-ld_classic -Wl,-headerpad_max_install_names -Wl,-rpath,$ld_rel_name/../..${LDFLAGS:+ $LDFLAGS}"
@@ -862,6 +887,9 @@ build_wine() {
     else
         if test -f "Makefile"; then
             info "found previous build; cleaning"
+            if test $is_interactive = 1; then
+                prompt_continue "Found existing Wine build. Clean and continue?"
+            fi
             (make clean && touch ".cxb-success") | extinfo
             if test -f ".cxb-success"; then
                 info "successfully cleaned previous build"
@@ -874,38 +902,322 @@ build_wine() {
         fi
         
         # makedep expects distversion.h in parent directory for some reason
-        rm -f "$wine_abs_conf_dir/distversion.h" && ln -s "$wine_abs_include_dir/distversion.h" "$wine_abs_conf_dir/distversion.h" || exite "failed to symlink distversion.h"
+        rm -f "$wine_conf_dir/distversion.h" && ln -s "build/include/distversion.h" "$wine_conf_dir/distversion.h" || exite "failed to symlink distversion.h"
 
         if test $is_apple_silicon = 1; then
-            (arch -x86_64 "$wine_abs_link_dir"/configure $wineconf_args --verbose 2>&1 && touch ".cxb-success") | extinfo
+            (arch -x86_64 ../src/configure $wineconf_args --prefix="$tmp_prefix" --verbose 2>&1 && touch ".cxb-success") | extinfo
         else
-            ("$wine_abs_link_dir"/configure $wineconf_args 2>&1 && touch ".cxb-success") | extinfo
+            (../src/configure $wineconf_args --prefix="$tmp_prefix" 2>&1 && touch ".cxb-success") | extinfo
         fi
         
         test -f ".cxb-success" && rm ".cxb-success" || exite "failed to configure Wine"
-        rm -f "$wine_abs_conf_dir/distversion.h"
     fi
-    
-    key_info "building Wine... (this will take a while)"
+
+    key_info "building Wine... (this can take a while)"
     if test $is_apple_silicon = 1; then
-        (arch -x86_64 make -j$build_ncpu 2>&1 && touch ".cxb-success") | extinfo
+        (arch -x86_64 make -j$build_ncpu 2>&1 && touch ".cxb-success") | tee ".cxb-build-debug" | extinfo
     else
-        (make -j$build_ncpu 2>&1 && touch ".cxb-success") | extinfo
+        (make -j$build_ncpu 2>&1 && touch ".cxb-success") | tee ".cxb-build-debug" | extinfo
     fi
     test -f ".cxb-success" && rm ".cxb-success" || exite "failed to build Wine"
 
-    if test $is_apple_silicon = 1; then
-        (arch -x86_64 make -j$build_ncpu install-lib prefix="$tmp_prefix" DESTDIR="$wine_abs_build_dir/dist" 2>&1 && touch ".cxb-success") | extinfo
-    else
-        (make -j$build_ncpu install-lib prefix="$tmp_prefix" DESTDIR="$wine_abs_build_dir/dist" 2>&1 && touch ".cxb-success") | extinfo
-    fi
-    test -f ".cxb-success" && rm ".cxb-success" || exite "failed to build Wine"
+    if test ! -d "$wine_dist_dir" || test "$(tail -n 2 ".cxb-build-debug")" != "Wine build complete."; then
+        info "installing Wine to %s" "$wine_dist_dir"
 
-    rm -rf "$wine_abs_dist_dir"
-    mv "$wine_abs_build_dir/dist$tmp_prefix" "$wine_abs_dist_dir"
+        rm -rf "$wine_dist_dir"
+        if test $is_apple_silicon = 1; then
+            (arch -x86_64 make -j$build_ncpu install-lib prefix="/" DESTDIR="$wine_dist_dir" 2>&1 && touch ".cxb-success") | extinfo
+        else
+            (make -j$build_ncpu install-lib prefix="/" DESTDIR="$wine_dist_dir" 2>&1 && touch ".cxb-success") | extinfo
+        fi
+        test -f ".cxb-success" && rm ".cxb-success" || exite "failed to build Wine"
+    else
+        info "no updates to Wine; no need to reinstall"
+    fi
+    rm ".cxb-build-debug"
 
     key_info "Wine built successfully"
 }
 
 (build_wine)
-# TODO: which file?
+
+key_info "packaging..."
+
+info "copying Wine distribution"
+test -d "$dst_dir" || mkdir -p "$dst_dir" || exite "failed to create %s" "$dst_dir"
+for d in bin lib share; do
+    test -d "$dst_dir/$d" || mkdir "$dst_dir/$d" || exite "failed to create %s" "$dst_dir/$d"
+    cp -R -p -P -f "$wine_dist_dir/$d"/* "$dst_dir/$d" || exite "failed to write to %s" "$dst_dir/$d"
+done
+
+char_nl='
+'
+echo "int main(){}" > "$scratch_dir/.cxb-conf.c"
+# TODO: is there a built-in way to do this?
+# this has issues with newlines in filepaths, etc.
+ld_search_paths=
+if ld_verbose_out="$("$CC" -Xlinker --verbose -o /dev/null "$scratch_dir/.cxb-conf.c" 2> /dev/null)" && echo "$ld_verbose_out" | grep -q -F "SEARCH_DIR"; then
+    # gnu linker
+    esc_ld_search_paths="$(echo "$ld_verbose_out" | sed -n 's/SEARCH_DIR("=\?\([^"]\+\)"); */\1\n/gp')"
+    IFS="$char_nl"
+    for f in $esc_ld_search_paths; do
+        ld_search_paths="${ld_search_paths:+$ld_search_paths:}$(printf "%b" "$f")"
+    done
+    reset_ifs
+elif test $is_macos = 1 && ld_verbose_out="$("$CC" -Xlinker -v -o /dev/null "$scratch_dir/.cxb-conf.c" 2>&1)" && echo "$ld_verbose_out" | grep -q -F "Library search paths:"; then
+    # clang linker on macOS
+    ld_verbose_out="${ld_verbose_out##?*Library search paths:?}"
+    ld_verbose_out="${ld_verbose_out%%?Framework search paths?*}"
+    esc_ld_search_paths="$(echo "$ld_verbose_out" | sed -e 's/^	//g')"
+    IFS="$char_nl"
+    # TODO: not sure if this is right
+    for f in $esc_ld_search_paths; do
+        ld_search_paths="${ld_search_paths:+$ld_search_paths:}$(printf "%b" "$f")"
+    done
+    reset_ifs
+else
+    # best effort based on LIBRARY_PATH and LDFLAGS
+    load_ldflags() {
+        while test $# != 0; do
+            case "$1" in
+            -L) shift; ld_search_paths="${ld_search_paths:+$ld_search_paths:}$1";;
+            -L*) ld_search_paths="${ld_search_paths:+$ld_search_paths:}${1#??}";;
+            esac
+            shift
+        done
+    }
+    load_ldflags $LDFLAGS
+    if test -n "$LIBRARY_PATH"; then
+        ld_search_paths="${ld_search_paths:+$ld_search_paths:}$LIBRARY_PATH"
+    fi
+fi
+rm "$scratch_dir/.cxb-conf.c"
+
+# TODO: is this correct?
+if test $is_macos = 1; then
+    ld_search_paths="${ld_search_paths:+$ld_search_paths:}/usr/local/lib:/usr/lib"
+fi
+
+rtdeps_dir="$scratch_dir/rtdeps"
+test -d "$rtdeps_dir" || mkdir "$rtdeps_dir" || exite "failed to create %s" "$rtdeps_dir"
+
+info "finding required libraries..."
+needed_libs_esc="$("$CC" -dM -E "$wine_include_dir/config.h" 2> /dev/null | sed -n -e 's/^#define SONAME_[^ ]* "\(.*\)"$/\1/gp')"
+needed_libs=
+IFS="$char_nl"
+for f in $needed_libs_esc; do
+    needed_libs="${needed_libs:+$needed_libs:}$(printf "%b" "$f")"
+done
+
+IFS=":"
+wine_dyn_dir="$wine_dist_dir/lib/wine/x86_64-unix:$wine_dist_dir/bin"
+
+load_dynamic_deps() {
+    # TODO: handle rpaths properly
+    if test $is_macos = 1; then
+        dynamic_libs="$(otool -L "$1" | grep -v -F "$(basename "$1")" | sed -n -e 's/^\t\([^ ]*\) (compatibility.*$/\1/gp')"
+    else
+        readelf_bin="$(command -v readelf)" || exite "cannot locate readelf; please install readelf to build the final package"
+
+        dynamic_libs="$("$readelf_bin" -d "$1" | sed -n -e 's/^.*(NEEDED).*\[\(.*\)\]\s*$/\1/p')"
+    fi
+    printf '%s' "$dynamic_libs" | tr '\n' ':'
+}
+
+ld_find() {
+    for dir in $ld_search_paths; do
+        if test -n "$dir" && test -f "$dir/$1"; then
+            echo "$dir/$1"
+            return
+        fi
+    done
+}
+
+locate_lib() {
+    lib_name="$(basename "$1")"
+
+    for d in "$rtdeps_dir" $wine_dyn_dir; do
+        if test -f "$d/$lib_name"; then
+            return
+        fi
+    done
+
+    # detect system libraries
+    # probably unnecessary to copy these
+    case "$1" in
+    /System/*|/usr/lib/*|*/MacOSX*.sdk/*) return;;
+    esac
+
+    # special-case libraries
+    case "$lib_name" in
+    libc.*|libc++.*|libstdc++.*|libcups.*|libodbc.*) return;;
+    esac
+
+    found_lib=
+
+    if test -f "$1"; then
+        found_lib="$1"
+    else
+        found_lib="$(ld_find "$lib_name")"
+    fi
+
+    test -n "$found_lib" || exite "failed to locate %s; please add the directory in which it is contained to your \$LIBRARY_PATH" "$lib_name"
+
+    # need to store in positional parameters; other variables will be overwritten
+    set -- "$found_lib"
+
+    for f in $(load_dynamic_deps "$found_lib"); do
+        locate_lib "$f"
+    done
+
+    while test -L "$1"; do
+        rel_name="$(basename "$1")"
+        link_target="$(get_link "$1")"
+        link_target_name="$(basename "$link_target")"
+
+        if test -f "$rtdeps_dir/$rel_name"; then
+            return
+        fi
+
+        if test "$link_target_name" != "$rel_name"; then
+            ln -s "$(basename "$link_target")" "$rtdeps_dir/$rel_name"
+        fi
+        set -- "$(cd "$(dirname "$1")" && echo "$(abspath "$link_target")")"
+    done
+    
+    rel_name="$(basename "$1")"
+    if test ! -f "$rtdeps_dir/$rel_name"; then
+        cp "$1" "$rtdeps_dir/$rel_name"
+    fi
+}
+
+info "locating dependencies..."
+
+# locate all dynamically linked libraries loaded directly
+for d in $wine_dyn_dir; do
+    for f in "$d"/*; do
+        for l in $(load_dynamic_deps "$f"); do
+            locate_lib "$l"
+        done
+    done
+done
+
+# locate all dynamically linked libraries loaded indirectly
+for l in $needed_libs; do
+    locate_lib "$l"
+done
+
+# any libraries that cannot easily be found statically (mostly gstreamer related) here
+
+# gstreamer finds these plugins by finding its own location and entering the gstreamer-1.0 subdirectory
+# gstreamer finds its own location using dladdr()
+# ref: https://github.com/GStreamer/gstreamer/blob/d68ac0db571f44cae42b57c876436b3b09df616b/subprojects/gstreamer/gst/gstregistry.c#L1599-L1638
+gstreamer_libs="libgstasf:libgstaudioconvert:libgstaudioparsers:libgstaudioresample:libgstavi:libgstcoreelements:libgstdebug:libgstdeinterlace:libgstid3demux:libgstisomp4:libgstopengl:libgstplayback:libgsttypefindfunctions:libgstvideoconvertscale:libgstvideofilter:libgstvideoparsersbad:libgstwavparse"
+if test $is_macos = 1; then
+    gstreamer_libs="${gstreamer_libs}:libgstapplemedia"
+fi
+
+dl_ext=
+if test $is_macos = 1; then
+    dl_ext=".dylib"
+else
+    dl_ext=".so"
+fi
+
+test -d "$rtdeps_dir/gstreamer-1.0" || mkdir "$rtdeps_dir/gstreamer-1.0" || exite "failed to create %s" "$rtdeps_dir/gstreamer-1.0"
+
+for lib in $gstreamer_libs; do
+    found_lib="$(ld_find "gstreamer-1.0/$lib$dl_ext")"
+    test -n "$found_lib" || exite "could not locate gstreamer plugin %s" "$lib"
+    
+    if test ! -f "$rtdeps_dir/gstreamer-1.0/$lib$dl_ext"; then
+        cp "$found_lib" "$rtdeps_dir/gstreamer-1.0/$lib$dl_ext"
+    fi
+done
+
+find_rpaths() {
+    all_rpaths="$(otool -l "$1" | awk '
+        $1 == "Load" && $2 == "command" { r = 0 }
+        $1 == "cmd" && $2 == "LC_RPATH" { r = 1 }
+        r && $1 == "path" { print $2 }
+    ')"
+    printf '%s' "$all_rpaths" | tr '\n' ':'
+}
+
+patch_lib() {
+    l="$1"
+    rel="$2"
+    brel="$3"
+    l_name="$(basename "$l")"
+
+    if test $is_macos = 1; then
+        install_name_tool -id "@rpath/$rel$l_name" "$l" 2> /dev/null || exite "failed to update id for %s" "$l"
+        find_rpaths "$l" | tr ':' '\n' | grep -q -e "^@loader_path/$" || \
+            install_name_tool -add_rpath "@loader_path/" "$l" 2> /dev/null || exite "failed to update rpath for %s" "$l"
+
+        name_changes=
+        for dep in $(load_dynamic_deps "$l"); do
+            dep_base="$(basename "$dep")"
+            if test -f "$rtdeps_dir/$dep_base"; then
+                name_changes="${name_changes:+$name_changes:}-change:$dep:@rpath/$brel$dep_base"
+            elif test -f "$rtdeps_dir/$rel$dep_base"; then
+                name_changes="${name_changes:+$name_changes:}-change:$dep:@rpath/$dep_base"
+            fi
+        done
+
+        if test -n "$name_changes"; then
+            install_name_tool $name_changes "$l" 2> /dev/null || exite "failed to patch libraries for %s" "$l"
+        fi
+        codesign -f -s - "$l" 2> /dev/null || exite "failed to codesign %s" "$l"
+    else
+        # TODO: figure out how to patch the rpath
+        warn "could not patch rpath for %s; ELF patching on linux is unimplemented" "$l"
+    fi
+}
+
+info "patching runtime dependencies..."
+for l in "$rtdeps_dir"/*; do
+    if test ! -f "$l"; then
+        continue
+    fi
+
+    if test -L "$l"; then
+        cp -P -f "$l" "$dst_dir/lib"
+        continue
+    fi
+
+    patch_lib "$l"
+    
+    cp -f "$l" "$dst_dir/lib"
+done
+
+test -d "$dst_dir/lib/gstreamer-1.0" || mkdir "$dst_dir/lib/gstreamer-1.0" || exite "failed to create %s" "$dst_dir/lib/gstreamer-1.0"
+
+info "patching gstreamer plugins..."
+for l in "$rtdeps_dir/gstreamer-1.0"/*; do
+    patch_lib "$l" "gstreamer-1.0/" "../"
+
+    cp -f "$l" "$dst_dir/lib/gstreamer-1.0"
+done
+
+info "patching Wine libraries..."
+for l in "$dst_dir/lib/wine/x86_64-unix"/*; do
+    patch_lib "$l" "wine/x86_64-unix/" "../../"
+done
+
+for l in "$dst_dir/bin"/*; do
+    patch_lib "$l" "../bin/" "../lib/"
+
+    if test $is_macos = 1; then
+        install_name_tool -delete_rpath "@loader_path/../.." "$l" 2> /dev/null || exite "could not clear bad rpath from %s" "$l"
+        codesign -f -s - "$l" 2> /dev/null || exite "failed to codesign %s" "$l"
+    else
+        warn "could not patch rpath for %s; ELF patching on linux is unimplemented" "$l"
+    fi
+done
+
+info "base Wine built successfully"
+
+# TODO: apply DXVK, GPTk patches
+
+reset_ifs
