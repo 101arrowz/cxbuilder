@@ -40,13 +40,21 @@ jobs:
   build:
     needs: [find-cxver]
     strategy:
-      # todo: add linux
       matrix:
         os:
-          - name: macos
+          # note: we could save some compute by not compiling twice on two separate runners at the cost of future modifications (e.g. different CFLAGS)
+          # as they run in parallel and are free for public repositories, such a change isn't necessary for now
+          - name: macos-arm
             runner: macos-latest
             cflags: -march=x86-64-v2 -maes -mpclmul
+            cxbflags: 
             dxvk_url: https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507/dxvk-macOS-async-v1.10.3-20230507.tar.gz
+          - name: macos-intel
+            runner: macos-latest
+            cflags: -march=x86-64-v2 -maes -mpclmul
+            cxbflags: --no-gptk
+            dxvk_url: https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507/dxvk-macOS-async-v1.10.3-20230507.tar.gz
+          # todo: add linux
     runs-on: ${{ matrix.os.runner }}
     if: ${{ needs.find-cxver.outputs.updated }}
     env:
@@ -58,7 +66,7 @@ jobs:
       CXWINE: ${{ github.workspace }}/cxwine
       GPTK: ${{ github.workspace }}/game-porting-toolkit
       DXVK: ${{ github.workspace }}/dxvk
-      CXB_FLAGS: ${{ matrix.os.name != 'macos' && '--no-gptk' || '' }}
+      CXB_FLAGS: ${{ matrix.os.cxbflags }}
       OS_NAME: ${{ matrix.os.name }}
       CXB_BUILD: ${{ github.workspace }}/build
       CXB_BUILD_NAME: crossover-${{ needs.find-cxver.outputs.cx-version }}-wine-${{ matrix.os.name }}

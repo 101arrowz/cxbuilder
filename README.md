@@ -114,4 +114,4 @@ The fix is to re-sign a version of the `dxgi.dll` built by Wine for `wined3d` (N
 ## License
 CXBuilder is licensed under the LGPL v3.0, as it is a derivative work of the LGPL-licensed CrossOver Wine subproject (which itself is a derivative work of Wine).
 
-Please note that the `game-porting-toolkit` subdirectory contains proprietary software from Apple, and is not covered under this license. Apple's Game Porting Toolkit is an optional
+Please note that the `game-porting-toolkit` subdirectory contains proprietary software from Apple, and is not covered under this license. Apple's Game Porting Toolkit is an optional plugin for this software.
