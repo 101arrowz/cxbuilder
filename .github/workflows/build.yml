@@ -1,0 +1,117 @@
+name: build
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+jobs:
+  find-cxver:
+    runs-on: ubuntu-latest
+    env:
+      CX_META_URL: https://media.codeweavers.com/pub/crossover/source/
+    outputs:
+      updated: ${{ steps.check-update.outputs.updated == 'true' }}
+      cx-url: ${{ steps.find-ver.outputs.cx-url }}
+      cx-version: ${{ steps.find-ver.outputs.cx-version }}
+    steps:
+      - name: Find latest CrossOver version
+        id: find-ver
+        run: |
+          cx_file="$(curl -s "${{ env.CX_META_URL }}" | grep -oE 'crossover-sources-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz' | \
+            sort --version-sort | tail -n 1)"
+          cx_tag=${cx_file##crossover-sources-}
+          cx_tag=${cx_tag%%.tar.gz}
+          echo "cx-url=${{ env.CX_META_URL }}$cx_file" >> $GITHUB_OUTPUT
+          echo "cx-version=$cx_tag" >> $GITHUB_OUTPUT
+
+      - name: Check for update
+        id: check-update
+        run: |
+          if ${{ github.event_name != 'schedule' }}; then
+            echo "updated=true" >> $GITHUB_OUTPUT
+          else
+            latest_ver="$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.name')"
+            if echo "$latest_ver" | grep -q -F "${{ steps.find-ver.outputs.cx-version }}"; then
+              echo "updated=false" >> $GITHUB_OUTPUT
+            else
+              echo "updated=true" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  build:
+    needs: [find-cxver]
+    strategy:
+      # todo: add linux
+      matrix:
+        os:
+          - name: macos
+            runner: macos-latest
+            cflags: -march=x86-64-v2 -maes -mpclmul
+            dxvk_url: https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507/dxvk-macOS-async-v1.10.3-20230507.tar.gz
+    runs-on: ${{ matrix.os.runner }}
+    if: ${{ needs.find-cxver.outputs.updated }}
+    env:
+      DXVK_URL: ${{ matrix.os.dxvk_url }}
+      CFLAGS: -O3 ${{ matrix.os.cflags }}
+      CROSSCFLAGS: -O3 ${{ matrix.os.cflags }}
+      CX_URL: ${{ needs.find-cxver.outputs.cx-url }}
+      CX_VERSION: ${{ needs.find-cxver.outputs.cx-version }}
+      CXWINE: ${{ github.workspace }}/cxwine
+      GPTK: ${{ github.workspace }}/game-porting-toolkit
+      DXVK: ${{ github.workspace }}/dxvk
+      CXB_FLAGS: ${{ matrix.os.name != 'macos' && '--no-gptk' || '' }}
+      OS_NAME: ${{ matrix.os.name }}
+      CXB_BUILD: ${{ github.workspace }}/build
+      CXB_BUILD_NAME: crossover-${{ needs.find-cxver.outputs.cx-version }}-wine-${{ matrix.os.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download CrossOver Wine sources
+        run: |
+          mkdir -p "${{ env.CXWINE }}"
+          curl -s "${{ env.CX_URL }}" | tar -zx --strip-components=2 -C "${{ env.CXWINE }}" sources/wine
+        
+      - name: Download DXVK
+        run: |
+          mkdir -p "${{ env.DXVK }}"
+          curl -s -L "${{ env.DXVK_URL }}" | tar -zx --strip-components=1 -C "${{ env.DXVK }}"
+      
+      - name: Run CXBuilder
+        run: |
+          ./cxbuilder.sh -x -w "${{ env.CXWINE }}" --gptk "${{ env.GPTK }}" --dxvk "${{ env.DXVK }}" -v -o "${{ env.CXB_BUILD }}" ${{ env.CXB_FLAGS }}
+      
+      - name: Create tarball
+        run: |
+          mv "${{ env.CXB_BUILD }}" "${{ env.CXB_BUILD_NAME }}"
+          tar -czf "${{ github.workspace }}/${{ env.CXB_BUILD_NAME }}.tar.gz" "${{ env.CXB_BUILD_NAME }}"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CXB_BUILD_NAME }}
+          path: ${{ github.workspace }}/${{ env.CXB_BUILD_NAME }}.tar.gz
+
+  upload:
+    needs: [find-cxver, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CX_VERSION: ${{ needs.find-cxver.outputs.cx-version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Get release metadata
+        id: meta
+        run: |
+          echo "files=$(echo "${{ github.workspace }}"/*.tar.gz | tr ' ' ',')" >> $GITHUB_OUTPUT
+          echo "short-sha=$(echo "${{ github.sha }}" | cut -c -8)" >> $GITHUB_OUTPUT
+
+      - name: Release
+        uses: ncipollo/release-action@v1
+        with:
+          body: CXBuilder tarballs for CrossOver ${{ env.CX_VERSION }}
+          artifacts: ${{ steps.meta.outputs.files }}
+          tag: v${{ env.CX_VERSION }}-${{ steps.meta.outputs.short-sha }}

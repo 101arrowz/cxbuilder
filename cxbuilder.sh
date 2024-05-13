@@ -16,7 +16,7 @@ abspath() {
     if test -d "$1"; then
         echo "$(cd "$1" && pwd)"
     else
-        echo "$(cd "$(dirname -- "$1")" && pwd)/$(basename -- "$1")"
+        echo "$(abspath "$(dirname "$1")")/$(basename -- "$1")"
     fi
 }
 
@@ -110,7 +110,7 @@ eprintn() { printf "%s\n" "$1" >&2; }
 log_write() { printf "%s" "$1" >> "$CXB_LOG_FILE"; }
 
 usage() {
-    eprintn "$0 [-v] [-x] [--wine dir] [--gptk dir] [--dxvk dir] [--no-deps] [--out dest_dir] [source_dir]"
+    eprintn "$0 [-v] [-x] [--wine dir] [--gptk dir] [--dxvk dir] [--no-deps] [--rebuild] [--no-clean] [--out dest_dir] [source_dir]"
     eprintn ""
     eprintn "Arguments:"
     eprintn "    -h, --help           Prints this help message and exits"
@@ -127,7 +127,7 @@ usage() {
     eprintn ""
     eprintn "    --no-gptk            Disable use of Direct3D DLLs from Apple's Game Porting"
     eprintn "                         Toolkit (GPTk). GPTk is supported only on Apple Silicon"
-    eprintn "                         Macs. GPTk disabled by default on all other devices."
+    eprintn "                         Macs. GPTk is disabled by default on all other devices."
     eprintn ""
     eprintn "    --gptk dir           Uses the Game Porting Toolkit from the specified"
     eprintn "                         directory. This should have a redist/ subdirectory with"
@@ -160,6 +160,11 @@ usage() {
     eprintn "                         specified after updating compiler/linker flags but"
     eprintn "                         should generally be avoided otherwise."
     eprintn ""
+    eprintn "    -d, --no-clean       Skips cleaning the build cache from dest_dir after a"
+    eprintn "                         build completes. Useful for debugging broken builds"
+    eprintn "                         without having to rebuild from source each time, but"
+    eprintn "                         should be unnecessary otherwise."
+    eprintn ""
     eprintn "    -o, --out dest_dir   Where to generate the final Wine build. This directory"
     eprintn "                         will contain a similar structure to /usr/local (and"
     eprintn "                         that is indeed a valid value for this argument) after"
@@ -185,6 +190,7 @@ while test $# != 0; do
     --dxvk) shift; use_dxvk=1; dxvk_dir="$1";;
     --no-deps) fetch_deps=0;;
     -r|--rebuild) rebuild_wine=1;;
+    -d|--no-clean) post_clean=0;;
     -o|--out) shift; dst_dir="$1";;
     -*) eprintn "unknown argument $1"; usage; exit 1;;
     *)
@@ -200,10 +206,10 @@ while test $# != 0; do
 done
 
 cleanup() {
-    if test ! -z "$tmp_build"; then
+    if test -n "$tmp_build"; then
         rm -rf "$tmp_build"
     fi
-    if test ! -z "$tmp_prefix"; then
+    if test -n "$tmp_prefix"; then
         rm "$tmp_prefix"
     fi
     reset_ifs
@@ -220,7 +226,8 @@ if test $is_interactive = 0; then
 fi
 
 if test $is_macos = 0; then
-    warn "CXBuilder is only tested on macOS; expect things to break"
+    # warn "CXBuilder is only tested on macOS; expect things to break"
+    prompt_continue "CXBuilder does not yet work on Linux; this build will break! Continue anyway?"
 fi
 
 is_apple_silicon=0
@@ -232,14 +239,29 @@ else
 fi
 
 if test -z $use_gptk; then
-    info "gptk options unspecified; $(test $is_apple_silicon = 1 && echo "enabling by default on Apple Silicon" || echo "disabling by default (not on Apple Silicon)")"
-    use_gptk=$is_apple_silicon
+    if test $is_apple_silicon = 1 && test -n "$source_dir" && test -d "$source_dir/gptk"; then
+        info "found gptk subdirectory of source directory %s; enabling GPTk" "$source_dir"
+        use_gptk=1
+    else
+        info "gptk options (i.e. --gptk DIR, --no-gptk) unspecified; disabling by default"
+        use_gptk=0
+    fi
 fi
 
 if test $is_apple_silicon = 0 && test $use_gptk = 1 && test -z "$CXB_FORCE_GPTK"; then
     warn "building with GPTk on a non-Apple Silicon device, but GPTk only supports Apple Silicon devices; things will likely break"
     warn "use --no-gptk or set \$CXB_FORCE_GPTK to silence this warning"
-    prompt_continue "Continue?"
+    prompt_continue "Continue anyway?"
+fi
+
+if test -z "$use_dxvk"; then
+    if test -n "$source_dir" && test -d "$source_dir/dxvk"; then
+        info "found dxvk subdirectory of source directory %s; enabling DXVK" "$source_dir"
+        use_dxvk=1
+    else
+        info "dxvk options (i.e. --dxvk DIR, --no-dxvk) unspecified; disabling by default"
+        use_dxvk=0
+    fi
 fi
 
 if test $is_macos = 1; then
@@ -257,12 +279,6 @@ fi
 
 info "CC=${CC:-\(unset\)}; CXX: ${CXX:-\(unset\)}"
 
-if test -z "$use_dxvk"; then
-    info "dxvk options unspecified; enabling by default"
-fi
-
-use_dxvk="${use_dxvk:-1}"
-
 if test -z "$source_dir"; then
     if test -z "$dst_dir"; then
         exite "No destination directory specified; specify a source directory or use -o your/build/directory"
@@ -270,14 +286,6 @@ if test -z "$source_dir"; then
 
     if test -z "$wine_dir"; then
         exite "No Wine directory specified; specify a source directory or use -w your/wine/sources/directory"
-    fi
-
-    if test $use_gptk = 1 && test -z "$gptk_dir"; then
-        exite "GPTk is enabled but no GPTk directory was provided; specify a source directory, use --no-gptk, or use --gptk your/gptk/directory"
-    fi
-
-    if test $use_dxvk = 1 && test -z "$dxvk_dir"; then
-        exite "DXVK is enabled but no DXVK directory was provided; specify a source directory, use --no-dxvk, or use --dxvk your/dxvk/directory"
     fi
 else
     source_dir_err="cannot use source directory $source_dir"
@@ -396,17 +404,19 @@ if test ! -d "$dst_dir"; then
 fi
 
 if test ! -d "$scratch_dir"; then
-    mkdir "$scratch_dir" 2> /dev/null || warn "failed to create %s; creating a temporary build directory instead" "$scratch_dir" && if tmp_build="$(mktemp -d 2> /dev/null)"; then
+    if mkdir "$scratch_dir" 2> /dev/null; then
+        info "successfully created %s" "$scratch_dir"
+    elif tmp_build="$(mktemp -d 2> /dev/null)"; then
+        warn "failed to create %s; creating a temporary build directory instead" "$scratch_dir"
         scratch_dir="$tmp_build"
     else
         exite "failed to create CXBuilder tempdir %s" "$scratch_dir"
     fi
-    info "successfully created %s" "$scratch_dir"
 else
     info "located previous CXBuilder run in %s" "$scratch_dir"
 fi
 
-info "validation complete; starting build"
+info "validation complete; searching for dependencies"
 
 get_inode() {
     ls -ldi -- "$1" | cut -d ' ' -f 1
@@ -431,6 +441,7 @@ else
         nproc
     fi
 fi)"
+scratch_dir_inode="$(get_inode "$scratch_dir")"
 
 if test $fetch_deps = 1; then
     for cmd in curl tar; do
@@ -457,7 +468,6 @@ if test $fetch_deps = 1; then
     export CPATH="$deps_dir/include${CPATH:+:$CPATH}"
     export LIBRARY_PATH="$deps_dir/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 
-    scratch_dir_inode="$(get_inode "$scratch_dir")"
     brew_default_prefix=
     if test $is_macos = 1; then
         # note: we only care about x86-64 here
@@ -474,22 +484,26 @@ if test $fetch_deps = 1; then
     tmp_prefix_file="$deps_dir/.tmp-prefix"
     if test ! -e "$tmp_prefix_file" || test "$tmp_prefix" != "$(cat "$tmp_prefix_file" 2> /dev/null || echo)"; then
         # re-link the files
-        info "microbrew has been moved; re-patching binaries"
-        for d in "$brew_dir"*; do
-            LC_ALL=C find "$d" -type f -exec sh -e -c '
-                brew_default_prefix="$1"
-                tmp_prefix="$2"
-                tmp_write="$3"
-                shift 3
-                for f; do
-                    sed -e "s%/tmp/cx[a-zA-Z0-9]\{$((${#brew_default_prefix} - 7))\}%$tmp_prefix%g" -- "$f" > "$tmp_write"
-                    mv -f -- "$tmp_write" "$f"
-                    if install_name_tool -id "$f" "$f" 2> /dev/null; then
-                        codesign -f -s - "$f" 2> /dev/null
-                    fi
-                done
-            ' sh "$brew_default_prefix" "$tmp_prefix" "$deps_scratch_dir/.cxb-relink" {} +
-        done
+        if test -e "$tmp_prefix_file"; then
+            info "microbrew has been moved; re-patching binaries"
+            for d in "$brew_dir"/*; do
+                test "$d" != "$brew_dir/*" || test -e "$d" || continue
+
+                LC_ALL=C find "$d" -type f -exec sh -e -c '
+                    brew_default_prefix="$1"
+                    tmp_prefix="$2"
+                    tmp_write="$3"
+                    shift 3
+                    for f; do
+                        sed -e "s%/tmp/cx[a-zA-Z0-9]\{$((${#brew_default_prefix} - 7))\}%$tmp_prefix%g" -- "$f" > "$tmp_write"
+                        mv -f -- "$tmp_write" "$f"
+                        if install_name_tool -id "$f" "$f" 2> /dev/null; then
+                            codesign -f -s - "$f" 2> /dev/null
+                        fi
+                    done
+                ' sh "$brew_default_prefix" "$tmp_prefix" "$deps_scratch_dir/.cxb-relink" {} +
+            done
+        fi
         echo "$tmp_prefix" > "$tmp_prefix_file"
     fi
 
@@ -545,13 +559,15 @@ if test $fetch_deps = 1; then
 
     linkmerge() {
         for f in "$1"/*; do
+            test "$f" != "$1/*" || test -e "$f" || continue
+
             tgt_name="${f#"$1/"}"
             prev_name="$2/$tgt_name"
             if test -d "$prev_name"; then
                 test -d "$f" || exite "%s is not a directory" "$f"
                 if test -L "$prev_name"; then
                     if test -d "$deps_scratch_dir/.cxb-link"; then
-                        rm "$deps_scratch_dir/.cxb-link"/*
+                        rm -f "$deps_scratch_dir/.cxb-link"/*
                     else
                         mkdir "$deps_scratch_dir/.cxb-link"
                     fi
@@ -563,6 +579,8 @@ if test $fetch_deps = 1; then
                     esac
 
                     for f2 in "$prev_name"/*; do
+                        test "$f2" != "$prev_name/*" || test -e "$f2" || continue
+
                         ln -s "$new_link${f2#"$prev_name"}" "$deps_scratch_dir/.cxb-link"
                     done
 
@@ -792,7 +810,7 @@ if test $fetch_deps = 1; then
                 make -j$build_ncpu 2>&1 && make install prefix="/" DESTDIR="$libinkq_dir" 2>&1 && touch "$libinkq_build_dir/.cxb-success"
             ) | extinfo
             if test -f "$libinkq_build_dir/.cxb-success"; then
-                rm "$libinkq_build_dir/.cxb-success"
+                rm -rf "$libinkq_build_dir"
             else
                 exite "failed to build libinotify-kqueue"
             fi
@@ -1114,7 +1132,7 @@ done
 # ref: https://github.com/GStreamer/gstreamer/blob/d68ac0db571f44cae42b57c876436b3b09df616b/subprojects/gstreamer/gst/gstregistry.c#L1599-L1638
 gstreamer_libs="libgstasf:libgstaudioconvert:libgstaudioparsers:libgstaudioresample:libgstavi:libgstcoreelements:libgstdebug:libgstdeinterlace:libgstid3demux:libgstisomp4:libgstopengl:libgstplayback:libgsttypefindfunctions:libgstvideoconvertscale:libgstvideofilter:libgstvideoparsersbad:libgstwavparse"
 if test $is_macos = 1; then
-    gstreamer_libs="${gstreamer_libs}:libgstapplemedia"
+    gstreamer_libs="${gstreamer_libs:+$gstreamer_libs:}libgstapplemedia"
 fi
 
 dl_ext=
@@ -1129,6 +1147,10 @@ test -d "$rtdeps_dir/gstreamer-1.0" || mkdir "$rtdeps_dir/gstreamer-1.0" || exit
 for lib in $gstreamer_libs; do
     found_lib="$(ld_find "gstreamer-1.0/$lib$dl_ext")"
     test -n "$found_lib" || exite "could not locate gstreamer plugin %s" "$lib"
+
+    for f in $(load_dynamic_deps "$found_lib"); do
+        locate_lib "$f"
+    done
     
     if test ! -f "$rtdeps_dir/gstreamer-1.0/$lib$dl_ext"; then
         cp "$found_lib" "$rtdeps_dir/gstreamer-1.0/$lib$dl_ext"
@@ -1216,8 +1238,80 @@ for l in "$dst_dir/bin"/*; do
     fi
 done
 
+reset_ifs
 info "base Wine built successfully"
 
 # TODO: apply DXVK, GPTk patches
+if test $use_dxvk = 1; then
+    info "patching in DXVK"
+    for d in "dxvk" "dxvk/i386-windows" "dxvk/x86_64-windows"; do
+        test -d "$dst_dir/lib/$d" || mkdir "$dst_dir/lib/$d" || exite "failed to create %s" "$dst_dir/lib/$d"
+    done
+    test -z "$(ls "$dxvk_dir/x32")" || cp -p -f "$dxvk_dir/x32"/* "$dst_dir/lib/dxvk/i386-windows"
+    test -z "$(ls "$dxvk_dir/x64")" || cp -p -f "$dxvk_dir/x64"/* "$dst_dir/lib/dxvk/x86_64-windows"
 
-reset_ifs
+    dxvk_targets="i386-windows"
+    if test $use_gptk != 1; then
+        dxvk_targets="$dxvk_targets x86_64-windows"
+    fi
+
+    for d in $dxvk_targets; do
+        for f in "$dst_dir/lib/dxvk/$d"/*; do
+            test "$f" != "$dst_dir/lib/dxvk/$d/*" || test -e "$f" || continue
+            f_name="$(basename "$f")"
+            # TODO: correctness
+            if test "$f_name" != "dxgi.dll"; then
+                if test -e "$dst_dir/lib/wine/$d/$f_name"; then
+                    mv -f "$dst_dir/lib/wine/$d/$f_name" "$dst_dir/lib/wine/$d/$f_name.wined3d"
+                fi
+                ln -s "../../dxvk/$d/$f_name" "$dst_dir/lib/wine/$d/$f_name" || exite "failed to symlink DXVK DLLs into Wine"
+            fi
+        done
+    done
+fi
+
+if test $use_gptk = 1; then
+    info "patching in GPTk"
+    for d in "gptk" "gptk/x86_64-unix" "gptk/x86_64-windows"; do
+        test -d "$dst_dir/lib/$d" || mkdir "$dst_dir/lib/$d" || exite "failed to create %s" "$dst_dir/lib/$d"
+    done
+
+    cp -R -p -P -f "$gptk_dir/redist/lib/external"/* "$dst_dir/lib/gptk/x86_64-unix"
+    cp -p -f "$gptk_dir/redist/lib/wine/x86_64-windows"/* "$dst_dir/lib/gptk/x86_64-windows"
+    
+    for f in "$dst_dir/lib/gptk/x86_64-windows"/*; do
+        f_name="$(basename "$f")"
+        if test -e "$dst_dir/lib/wine/x86_64-windows/$f_name"; then
+            mv -f "$dst_dir/lib/wine/x86_64-windows/$f_name" "$dst_dir/lib/wine/x86_64-windows/$f_name.wined3d"
+        fi
+        ln -s "../../gptk/x86_64-windows/$f_name" "$dst_dir/lib/wine/x86_64-windows/$f_name" || exite "failed to symlink GPTk DLLs into Wine"
+    done
+
+    for f in "$gptk_dir/redist/lib/wine/x86_64-unix"/*; do
+        f_name="$(basename "$f")"
+        if test -e "$dst_dir/lib/wine/x86_64-unix/$f_name"; then
+            mv -f "$dst_dir/lib/wine/x86_64-unix/$f_name" "$dst_dir/lib/wine/x86_64-unix/$f_name.wined3d"
+        fi
+        
+        ln -s "../../gptk/x86_64-unix/libd3dshared.dylib" "$dst_dir/lib/wine/x86_64-unix/$f_name" || exite "failed to symlink GPTk dylibs into Wine"
+    done
+fi
+
+key_info "Build complete in %s" "$dst_dir"
+
+if test $post_clean = 1; then
+    if post_cache_dir="$(mktemp -d 2> /dev/null)"; then
+        info "created temp dir at %s" "$post_cache_dir"
+        rmdir "$post_cache_dir"
+    else
+        post_cache_dir="/tmp/cxbsc$(to_prec $(awk 'BEGIN {srand(); print srand()}') 8)"
+        info "could not use mktemp -d; trying cache dir at %s instead" "$post_cache_dir"
+    fi
+
+    # preserve inode if possible
+    mv "$scratch_dir" "$post_cache_dir" || exite "failed to move CXBuilder cache to %s" "$post_cache_dir"
+
+    info "Saved CXBuilder cache to %s" "$post_cache_dir"
+    info "to reuse cache for future runs, run CXB_TEMP='%s' %s ..." "$post_cache_dir" "$0"
+    info "alternatively: mv %s %s/.cxbuilder" "$post_cache_dir" "$dst_dir"
+fi

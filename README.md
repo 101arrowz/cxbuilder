@@ -1,7 +1,7 @@
 # cxbuilder
 Build Wine from source with CrossOver patches. This allows you to run game launchers (e.g. Steam) and productivity software that do not work properly on mainline Wine.
 
-CXBuilder is tested on Wine 9.0 with CrossOver 24, and it is optimized for use with Apple Silicon-based Macs (though it works on Intel Macs too, and support for Linux is in progress). It essentially compiles the Wine from open-source [CrossOver source distributions](https://www.codeweavers.com/crossover/source) with some minor patches to improve performance.
+CXBuilder is tested on CrossOver 24 (which is based on Wine 9.0), and it is optimized for use with Apple Silicon-based Macs. However, it works on Intel Macs too, and support for Linux is in progress. It essentially compiles the Wine from the open-source [CrossOver source distributions](https://www.codeweavers.com/crossover/source), with various patches applied to improve graphics performance.
 
 If you're looking for an easier setup experience and are okay with running an older version of Wine, consider [Whisky](https://getwhisky.app). Alternatively, [purchase a CrossOver license](https://www.codeweavers.com/crossover/) for the best, most user-friendly experience and to support the developers of Wine.
 
@@ -19,7 +19,7 @@ Use `./cxbuilder.sh -h` to see the options. Here is an example of the output:
 ```sh
 $ ./cxbuilder.sh -h
 ./cxbuilder.sh [-v] [-x] [--wine dir] [--gptk dir] [--dxvk dir] [--no-deps]
-[--out dest_dir] [source_dir]
+               [--rebuild] [--no-clean] [--out dest_dir] [source_dir]
 
 Arguments:
     -h, --help           Prints this help message and exits
@@ -36,7 +36,7 @@ Arguments:
 
     --no-gptk            Disable use of Direct3D DLLs from Apple's Game Porting
                          Toolkit (GPTk). GPTk is supported only on Apple Silicon
-                         Macs. GPTk disabled by default on all other devices.
+                         Macs. GPTk is disabled by default on all other devices.
 
     --gptk dir           Uses the Game Porting Toolkit from the specified
                          directory. This should have a redist/ subdirectory with
@@ -69,6 +69,11 @@ Arguments:
                          specified after updating compiler/linker flags but
                          should generally be avoided otherwise.
 
+    -d, --no-clean       Skips cleaning the build cache from dest_dir after a
+                         build completes. Useful for debugging broken builds
+                         without having to rebuild from source each time, but
+                         should be unnecessary otherwise.
+
     -o, --out dest_dir   Where to generate the final Wine build. This directory
                          will contain a similar structure to /usr/local (and
                          that is indeed a valid value for this argument) after
@@ -82,17 +87,17 @@ Arguments:
                          be used to create a build with only one argument.
 ```
 
-If you are unfamiliar with building C programs, consider using the pre-built releases rather than building from source directly.
+If you are unfamiliar with building C programs, consider using the pre-built releases rather than building from source using the script directly.
 
 ## Post-install
 
 ### DXVK
-Game Porting Toolkit, and specifically its D3DMetal framework, does not provide 32-bit Direct3D DLLs; therefore, to run most 32-bit games, you would need to use [DXVK](https://github.com/doitsujin/dxvk). By default, CXBuilder bakes the DXVK you provide into your Wine build itself, meaning you won't need to install it into each `$WINEPREFIX` separately. If you use both `--gptk` and `--dxvk`, CXBuilder will bake DXVK for 32-bit Direct3D and D3DMetal for 64-bit Direct3D, and will also produce a script `cxb-install-dxvk` that you can use to override D3DMetal with 64-bit DXVK in your current `$WINEPREFIX`. 
+Game Porting Toolkit, and specifically its D3DMetal framework, does not provide 32-bit Direct3D DLLs; therefore, to run most 32-bit games, you would need to use [DXVK](https://github.com/doitsujin/dxvk). By default, CXBuilder bakes the DXVK you provide into your Wine build itself, meaning you won't need to install it into each `$WINEPREFIX` separately. If you use both `--gptk` and `--dxvk`, CXBuilder will bake DXVK for 32-bit Direct3D and D3DMetal for 64-bit Direct3D.
 
 Note that there are limitations on the builds of DXVK you can use on different platforms. Linux is relatively unrestricted, but macOS is much trickier; there are some notes about it further down. The TL;DR is, you should most likely use the latest release of [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS).
 
 ### Retina
-If you're using a Mac with a Retina display, you will likely want to configure Wine to recognize that. To do this, navigate to `HKEY_CURRENT_USER\Software\Wine\Mac Driver` in the registry (you may need to create the `Mac Driver` key if it does not exist). Add the key `RetinaMode` into `Mac Driver`; set its value to be the string `Y`. After restarting Wine, you'll want to double your DPI scaling; typically, you'd do this by running `winecfg.exe`, navigating to the `Graphics` pane, and changing your DPI from 96 to 192.
+If you're using a Mac with a Retina display, you will likely want to configure Wine to recognize that. To do this, navigate to `HKEY_CURRENT_USER\Software\Wine\Mac Driver` in the registry (you may need to create the `Mac Driver` key if it does not exist). Add the key `RetinaMode` into `Mac Driver`; set its value to be the string `Y`. After restarting Wine, you'll want to double your DPI scaling; typically, you'd do this by running `winecfg.exe`, navigating to the `Graphics` pane, and changing your DPI from 96 to 192. Note that Retina mode may break certain games.
 
 ## Notes
 
@@ -102,9 +107,11 @@ Past versions of CrossOver used a custom build of Clang with a special `wine32` 
 ### macOS DXVK notes
 Wine's Vulkan support on macOS goes through [MoltenVK](https://github.com/KhronosGroup/MoltenVK), a library that translates Vulkan calls into Metal. Unfortunately, MoltenVK supports only a subset of the Vulkan 1.2 standard, while modern versions of DXVK require Vulkan 1.3 or later. DXVK has also never officially supported macOS, and as a result mainline DXVK crashes immediately on most Macs. Altogether this means you will need to install a patched, old version of DXVK in order to run 32-bit Direct3D games.
 
-Your best bet is using [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS); if you choose to install it yourself, you should only copy `x32/d3d10core.dll` and `x32/d3d11.dll` into your `windows/syswow64` folder, and apply the corresponding DLL overrides. If you prefer DXVK to D3DMetal (the Direct3D translation layer supplied by Apple's Game Porting Toolkit), or would like to compare the two, you can also copy `x64/d3d10core.dll` and `x64/d3d11.dll` into `windows/system32`. **However, this would break by default if you built Wine with GPTk.** The fix is to use a version of the `dxgi.dll` built by Wine (NOT the version supplied by D3DMetal) after "re-signing" it to make it appear like a DLL not built by Wine. (Essentially the bytes 0x40-0x60 must be changed from their initial value of `"Wine builtin DLL"`). CXBuilder will do all of this for you, but if you'd like to build things by hand, have a look through the source code to see what you'll need to change.
+Your best bet is using [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS); if you choose to install it yourself, you should only copy `x32/d3d10core.dll` and `x32/d3d11.dll` into your `windows/syswow64` folder, and apply the corresponding DLL overrides. If you prefer DXVK to D3DMetal (the Direct3D translation layer supplied by Apple's Game Porting Toolkit), or would like to compare the two, you can also copy `x64/d3d10core.dll` and `x64/d3d11.dll` into `windows/system32`. **However, this would break by default if you built Wine with GPTk due to Wine's DLL override behavior.**
+
+The fix is to re-sign a version of the `dxgi.dll` built by Wine for `wined3d` (NOT the version supplied by D3DMetal) to make it appear as though it were not built by Wine, and copy that into your `WINEPREFIX` under `C:\Windows\System32`. (Essentially the bytes 0x40-0x60 must be changed from their initial value of `"Wine builtin DLL"` to something else). CXBuilder has support planned for simultaneous DXVK and D3DMetal integration into a single Wine build, with the backend configurable at runtime, by applying such a patch to `wined3d`'s `dxgi.dll`. However, if you'd like to use both at the same time in your personal Wine build, or if you'd prefer to build things by hand, make sure to follow these steps.
 
 ## License
-CXBuilder is licensed under the LGPL v3.0, as it is a derivative work of the LGPL-licensed CrossOver project (which itself is a derivative work of Wine).
+CXBuilder is licensed under the LGPL v3.0, as it is a derivative work of the LGPL-licensed CrossOver Wine subproject (which itself is a derivative work of Wine).
 
-Please note that the `game-porting-toolkit` subdirectory contains proprietary software from Apple, and is not covered under this license.
+Please note that the `game-porting-toolkit` subdirectory contains proprietary software from Apple, and is not covered under this license. Apple's Game Porting Toolkit is an optional
