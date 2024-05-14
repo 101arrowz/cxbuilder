@@ -1263,6 +1263,18 @@ if test $use_dxvk = 1; then
     test -z "$(ls "$dxvk_dir/x32")" || cp -p -f "$dxvk_dir/x32"/* "$dst_dir/lib/dxvk/i386-windows"
     test -z "$(ls "$dxvk_dir/x64")" || cp -p -f "$dxvk_dir/x64"/* "$dst_dir/lib/dxvk/x86_64-windows"
 
+    # Patch signatures to prevent Wine from ignoring these DLLs
+    for d in i386-windows x86_64-windows; do
+        for f in "$dst_dir/lib/dxvk/$d"/*; do
+            if test ! -f "$f"; then
+                continue
+            fi
+            (dd if="$f" ibs=1 count=64 2> /dev/null && printf 'Wine builtin DLL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' && \
+                dd if="$f" ibs=1 skip=96 2> /dev/null) > "$scratch_dir/.cxb-resig"
+            mv -f "$scratch_dir/.cxb-resig" "$f"
+        done
+    done
+
     dxvk_targets="i386-windows"
     if test $use_gptk != 1; then
         dxvk_targets="$dxvk_targets x86_64-windows"
@@ -1272,8 +1284,8 @@ if test $use_dxvk = 1; then
         for f in "$dst_dir/lib/dxvk/$d"/*; do
             test "$f" != "$dst_dir/lib/dxvk/$d/*" || test -e "$f" || continue
             f_name="$(basename "$f")"
-            # TODO: correctness
-            if test "$f_name" != "dxgi.dll"; then
+            # TODO: correctness on Linux
+            if test "$f_name" != "dx9.dll" || test $is_macos != 1 && test "$f_name" != "dxgi.dll"; then
                 if test -e "$dst_dir/lib/wine/$d/$f_name"; then
                     mv -f "$dst_dir/lib/wine/$d/$f_name" "$dst_dir/lib/wine/$d/$f_name.wined3d"
                 fi
