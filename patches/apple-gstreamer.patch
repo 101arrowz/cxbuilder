@@ -1,0 +1,67 @@
+diff --git a/dlls/winegstreamer/wg_transform.c b/dlls/winegstreamer/wg_transform.c
+index ab5ce38..3b521b1 100644
+--- a/dlls/winegstreamer/wg_transform.c
++++ b/dlls/winegstreamer/wg_transform.c
+@@ -293,7 +293,7 @@ NTSTATUS wg_transform_create(void *args)
+     struct wg_format output_format = *params->output_format;
+     struct wg_format input_format = *params->input_format;
+     GstElement *first = NULL, *last = NULL, *element;
+-    GstCaps *raw_caps = NULL, *src_caps = NULL;
++    GstCaps *raw_caps = NULL, *src_caps = NULL, *interim_caps = NULL;
+     NTSTATUS status = STATUS_UNSUCCESSFUL;
+     GstPadTemplate *template = NULL;
+     struct wg_transform *transform;
+@@ -359,10 +359,43 @@ NTSTATUS wg_transform_create(void *args)
+         case WG_MAJOR_TYPE_VIDEO_INDEO:
+         case WG_MAJOR_TYPE_VIDEO_WMV:
+         case WG_MAJOR_TYPE_VIDEO_MPEG1:
+-            if (!(element = find_element(GST_ELEMENT_FACTORY_TYPE_DECODER, src_caps, raw_caps))
++#ifdef __APPLE__
++            /* AZ hack: enable hardware decode on apple devices with pre-parsing */
++            /* transforms the codecs into a format tractable by Audio Toolbox/Video Toolbox */
++            switch (input_format.major_type)
++            {
++                case WG_MAJOR_TYPE_VIDEO_H264:
++                case WG_MAJOR_TYPE_AUDIO_MPEG4:
++                    interim_caps = gst_caps_copy(src_caps);
++                    if (input_format.major_type == WG_MAJOR_TYPE_VIDEO_H264)
++                    {
++                        gst_caps_set_simple(interim_caps, "stream-format", G_TYPE_STRING, "avc", NULL);
++                        gst_caps_set_simple(interim_caps, "alignment", G_TYPE_STRING, "au", NULL);
++                    }
++                    else if (input_format.major_type == WG_MAJOR_TYPE_AUDIO_MPEG4)
++                    {
++                        gst_caps_set_simple(interim_caps, "framed", G_TYPE_BOOLEAN, TRUE, NULL);
++                    }
++
++                    if (!(element = find_element(GST_ELEMENT_FACTORY_TYPE_PARSER, src_caps, interim_caps))
++                        || !append_element(transform->container, element, &first, &last))
++                    {
++                        gst_caps_unref(raw_caps);
++                        gst_caps_unref(interim_caps);
++                        goto out;
++                    }
++                    break;
++                default:
++                    interim_caps = gst_caps_ref(src_caps);
++            }
++#else
++            interim_caps = gst_caps_ref(src_caps);
++#endif
++
++            if (!(element = find_element(GST_ELEMENT_FACTORY_TYPE_DECODER, interim_caps, raw_caps))
+                     || !append_element(transform->container, element, &first, &last))
+             {
+                 gst_caps_unref(raw_caps);
++                gst_caps_unref(interim_caps);
+                 goto out;
+             }
+             break;
+@@ -377,6 +410,7 @@ NTSTATUS wg_transform_create(void *args)
+     }
+ 
+     gst_caps_unref(raw_caps);
++    gst_caps_unref(interim_caps);
+ 
+     switch (output_format.major_type)
+     {

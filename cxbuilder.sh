@@ -95,7 +95,7 @@ prompt_continue() {
         *) exit 1;;
         esac
         
-        eprint "\n"
+        eprintn ""
     fi
 }
 
@@ -1132,7 +1132,10 @@ done
 # ref: https://github.com/GStreamer/gstreamer/blob/d68ac0db571f44cae42b57c876436b3b09df616b/subprojects/gstreamer/gst/gstregistry.c#L1599-L1638
 gstreamer_libs="libgstasf:libgstaudioconvert:libgstaudioparsers:libgstaudioresample:libgstavi:libgstcoreelements:libgstdebug:libgstdeinterlace:libgstid3demux:libgstisomp4:libgstopengl:libgstplayback:libgsttypefindfunctions:libgstvideoconvertscale:libgstvideofilter:libgstvideoparsersbad:libgstwavparse"
 if test $is_macos = 1; then
+    # we can avoid pulling in ffmpeg on mac
     gstreamer_libs="${gstreamer_libs:+$gstreamer_libs:}libgstapplemedia"
+else
+    gstreamer_libs="${gstreamer_libs:+$gstreamer_libs:}libgstlibav"
 fi
 
 dl_ext=
@@ -1144,16 +1147,16 @@ fi
 
 test -d "$rtdeps_dir/gstreamer-1.0" || mkdir "$rtdeps_dir/gstreamer-1.0" || exite "failed to create %s" "$rtdeps_dir/gstreamer-1.0"
 
-for lib in $gstreamer_libs; do
-    found_lib="$(ld_find "gstreamer-1.0/$lib$dl_ext")"
-    test -n "$found_lib" || exite "could not locate gstreamer plugin %s" "$lib"
+for gst_lib_name in $gstreamer_libs; do
+    gst_lib="$(ld_find "gstreamer-1.0/$gst_lib_name$dl_ext")"
+    test -n "$gst_lib" || exite "could not locate gstreamer plugin %s" "$gst_lib_name"
 
-    for f in $(load_dynamic_deps "$found_lib"); do
+    for f in $(load_dynamic_deps "$gst_lib"); do
         locate_lib "$f"
     done
     
-    if test ! -f "$rtdeps_dir/gstreamer-1.0/$lib$dl_ext"; then
-        cp "$found_lib" "$rtdeps_dir/gstreamer-1.0/$lib$dl_ext"
+    if test ! -f "$rtdeps_dir/gstreamer-1.0/$gst_lib_name$dl_ext"; then
+        cp "$gst_lib" "$rtdeps_dir/gstreamer-1.0/$gst_lib_name$dl_ext"
     fi
 done
 
@@ -1210,6 +1213,7 @@ for l in "$rtdeps_dir"/*; do
 
     patch_lib "$l"
     
+    # note: $l is technically clobbered by patch_lib but it's the same value, so OK
     cp -f "$l" "$dst_dir/lib"
 done
 
@@ -1231,7 +1235,16 @@ for l in "$dst_dir/bin"/*; do
     patch_lib "$l" "../bin/" "../lib/"
 
     if test $is_macos = 1; then
-        install_name_tool -delete_rpath "@loader_path/../.." "$l" 2> /dev/null || exite "could not clear bad rpath from %s" "$l"
+        name_changes=
+        for rpath in $(find_rpaths "$l"); do
+            if test "$rpath" = "@loader_path/../.."; then
+                name_changes="${name_changes:+$name_changes:}-delete_rpath:$rpath"
+            fi
+        done
+
+        if test -n "$name_changes"; then
+            install_name_tool $name_changes "$l" 2> /dev/null || exite "could not clear bad rpaths from %s" "$l"
+        fi
         codesign -f -s - "$l" 2> /dev/null || exite "failed to codesign %s" "$l"
     else
         warn "could not patch rpath for %s; ELF patching on linux is unimplemented" "$l"

@@ -9,7 +9,7 @@ jobs:
     env:
       CX_META_URL: https://media.codeweavers.com/pub/crossover/source/
     outputs:
-      updated: ${{ steps.check-update.outputs.updated == 'true' }}
+      updated: ${{ steps.check-update.outputs.updated }}
       cx-url: ${{ steps.find-ver.outputs.cx-url }}
       cx-version: ${{ steps.find-ver.outputs.cx-version }}
     steps:
@@ -56,7 +56,7 @@ jobs:
             dxvk_url: https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507/dxvk-macOS-async-v1.10.3-20230507.tar.gz
           # todo: add linux
     runs-on: ${{ matrix.os.runner }}
-    if: ${{ needs.find-cxver.outputs.updated }}
+    if: ${{ needs.find-cxver.outputs.updated == 'true' }}
     env:
       DXVK_URL: ${{ matrix.os.dxvk_url }}
       CFLAGS: -O3 ${{ matrix.os.cflags }}
@@ -64,6 +64,7 @@ jobs:
       CX_URL: ${{ needs.find-cxver.outputs.cx-url }}
       CX_VERSION: ${{ needs.find-cxver.outputs.cx-version }}
       CXWINE: ${{ github.workspace }}/cxwine
+      PATCHES: ${{ github.workspace }}/patches
       GPTK: ${{ github.workspace }}/game-porting-toolkit
       DXVK: ${{ github.workspace }}/dxvk
       CXB_FLAGS: ${{ matrix.os.cxbflags }}
@@ -84,6 +85,12 @@ jobs:
           mkdir -p "${{ env.DXVK }}"
           curl -s -L "${{ env.DXVK_URL }}" | tar -zx --strip-components=1 -C "${{ env.DXVK }}"
       
+      - name: Apply patches
+        run: |
+          for patch in "${{ env.PATCHES }}"/*; do
+            git apply --recount --unsafe-paths --directory="${{ env.CXWINE }}" "$patch"
+          done
+
       - name: Run CXBuilder
         run: |
           ./cxbuilder.sh -x -w "${{ env.CXWINE }}" --gptk "${{ env.GPTK }}" --dxvk "${{ env.DXVK }}" -v -o "${{ env.CXB_BUILD }}" ${{ env.CXB_FLAGS }}
@@ -123,3 +130,5 @@ jobs:
           body: CXBuilder tarballs for CrossOver ${{ env.CX_VERSION }}
           artifacts: ${{ steps.meta.outputs.files }}
           tag: v${{ env.CX_VERSION }}-${{ steps.meta.outputs.short-sha }}
+          makeLatest: true
+          allowUpdates: true
