@@ -101,6 +101,11 @@ If you're using a Mac with a Retina display, you will likely want to configure W
 
 ## Notes
 
+### Patches
+There are some small patches to CrossOver in the `patches/` subdirectory that are applied only when creating the builds in the "Releases" tab. These are meant mainly to optimize the pre-built images for common use-cases.
+
+The `cxbuilder.sh` script does not use or search for these by default, and it is not recommended to apply them to your own CrossOver Wine source tree without understanding what they do.
+
 ### Custom LLVM
 Past versions of CrossOver used a custom build of Clang with a special `wine32` target to support both 32-bit and 64-bit Windows software in the same `WINEPREFIX`. As of Wine 9.0, it is no longer necessary to use a custom build of Clang for this, thanks to the new experimental WOW64 runtime within Wine. Thus CodeWeavers have removed their modified LLVM sources from their open-source releases.
 
@@ -110,6 +115,9 @@ Wine's Vulkan support on macOS goes through [MoltenVK](https://github.com/Khrono
 Your best bet is using [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS); if you choose to install it yourself, you should only copy `x32/d3d10core.dll` and `x32/d3d11.dll` into your `windows/syswow64` folder, and apply the corresponding DLL overrides. If you prefer DXVK to D3DMetal (the Direct3D translation layer supplied by Apple's Game Porting Toolkit), or would like to compare the two, you can also copy `x64/d3d10core.dll` and `x64/d3d11.dll` into `windows/system32`. **However, this would break by default if you built Wine with GPTk due to Wine's DLL override behavior.**
 
 The fix is to re-sign a version of the `dxgi.dll` built by Wine for `wined3d` (NOT the version supplied by D3DMetal) to make it appear as though it were not built by Wine, and copy that into your `WINEPREFIX` under `C:\Windows\System32`. (Essentially the bytes 0x40-0x60 must be changed from their initial value of `"Wine builtin DLL"` to something else). CXBuilder has support planned for simultaneous DXVK and D3DMetal integration into a single Wine build, with the backend configurable at runtime, by applying such a patch to `wined3d`'s `dxgi.dll`. However, if you'd like to use both at the same time in your personal Wine build, or if you'd prefer to build things by hand, make sure to follow these steps.
+
+### POSIX compliance
+CXBuilder is a single POSIX-compliant shell script `cxbuilder.sh`. It depends on various non-POSIX tools being installed, depending upon the operating system, but avoids these whenever possible. If it does not work on your system, please file an issue!
 
 ## License
 CXBuilder is licensed under the LGPL v3.0, as it is a derivative work of the LGPL-licensed CrossOver Wine subproject (which itself is a derivative work of Wine).

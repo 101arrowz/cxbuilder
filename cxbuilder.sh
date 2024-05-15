@@ -14,7 +14,7 @@ reset_ifs
 
 abspath() {
     if test -d "$1"; then
-        echo "$(cd "$1" && pwd)"
+        (cd "$1" && pwd)
     else
         echo "$(abspath "$(dirname "$1")")/$(basename -- "$1")"
     fi
@@ -507,7 +507,6 @@ if test $fetch_deps = 1; then
         echo "$tmp_prefix" > "$tmp_prefix_file"
     fi
 
-    brew_build_deps="bison:pkg-config:mingw-w64"
     brew_deps="bison pkg-config mingw-w64 freetype gettext gnutls gstreamer sdl2"
     if test $is_macos = 1; then
         brew_deps="$brew_deps molten-vk"
@@ -534,7 +533,7 @@ if test $fetch_deps = 1; then
             pyjd_dd='class dd(dict): __getattr__ = dict.get; __setattr__ = dict.__setitem__; __delattr__ = dict.__delitem__'
             pyjd_da="$(printf "class da(list):\n @property\n def length(self):\n  return len(self)\n @property\n def sh(self):\n  return ' '.join(str(v) for v in self)")"
             pyjd_conv='cv = lambda v: da([cv(a) for a in v]) if isinstance(v, list) else (dd({k:cv(a) for k, a in v.items()}) if isinstance(v, dict) else v)'
-            pyj_decoder="$(printf "import os, json\n$pyjd_dd\n$pyjd_da\n$pyjd_conv\ndata = cv(json.load(os.environ[\"json\"]))")"
+            pyj_decoder="$(printf "import os, json\n%s\n%s\n%s\ndata = cv(json.load(os.environ[\"json\"]))" "$pyjd_dd" "$pyjd_da" "$pyjd_conv")"
             json="$2" PYTHONIOENCODING=utf8 $builtin_py -c "$pyj_decoder; res = data$1; print(res if isinstance(res, str) else json.dumps(res)) if res is not None else None" 2> /dev/null
         fi
     }
@@ -1254,7 +1253,6 @@ done
 reset_ifs
 info "base Wine built successfully"
 
-# TODO: apply DXVK, GPTk patches
 if test $use_dxvk = 1; then
     info "patching in DXVK"
     for d in "dxvk" "dxvk/i386-windows" "dxvk/x86_64-windows"; do
@@ -1269,8 +1267,8 @@ if test $use_dxvk = 1; then
             if test ! -f "$f"; then
                 continue
             fi
-            (dd if="$f" ibs=1 count=64 2> /dev/null && printf 'Wine builtin DLL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' && \
-                dd if="$f" ibs=1 skip=96 2> /dev/null) > "$scratch_dir/.cxb-resig"
+            (dd if="$f" ibs=32 count=2 2> /dev/null && printf 'Wine builtin DLL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' && \
+                dd if="$f" ibs=32 skip=3 2> /dev/null) > "$scratch_dir/.cxb-resig"
             mv -f "$scratch_dir/.cxb-resig" "$f"
         done
     done
@@ -1284,13 +1282,16 @@ if test $use_dxvk = 1; then
         for f in "$dst_dir/lib/dxvk/$d"/*; do
             test "$f" != "$dst_dir/lib/dxvk/$d/*" || test -e "$f" || continue
             f_name="$(basename "$f")"
+
             # TODO: correctness on Linux
-            if test "$f_name" != "dx9.dll" || test $is_macos != 1 && test "$f_name" != "dxgi.dll"; then
-                if test -e "$dst_dir/lib/wine/$d/$f_name"; then
-                    mv -f "$dst_dir/lib/wine/$d/$f_name" "$dst_dir/lib/wine/$d/$f_name.wined3d"
-                fi
-                ln -s "../../dxvk/$d/$f_name" "$dst_dir/lib/wine/$d/$f_name" || exite "failed to symlink DXVK DLLs into Wine"
+            if test $is_macos = 1 && test "$f_name" = "dxgi.dll" || test "$f_name" = "dx9.dll"; then
+                continue
             fi
+
+            if test -e "$dst_dir/lib/wine/$d/$f_name"; then
+                mv -f "$dst_dir/lib/wine/$d/$f_name" "$dst_dir/lib/wine/$d/$f_name.wined3d"
+            fi
+            ln -s "../../dxvk/$d/$f_name" "$dst_dir/lib/wine/$d/$f_name" || exite "failed to symlink DXVK DLLs into Wine"
         done
     done
 fi
@@ -1306,14 +1307,25 @@ if test $use_gptk = 1; then
     
     for f in "$dst_dir/lib/gptk/x86_64-windows"/*; do
         f_name="$(basename "$f")"
+
+        if test "$f_name" = "d3d9.dll"; then
+            continue
+        fi
+
         if test -e "$dst_dir/lib/wine/x86_64-windows/$f_name"; then
             mv -f "$dst_dir/lib/wine/x86_64-windows/$f_name" "$dst_dir/lib/wine/x86_64-windows/$f_name.wined3d"
         fi
+
         ln -s "../../gptk/x86_64-windows/$f_name" "$dst_dir/lib/wine/x86_64-windows/$f_name" || exite "failed to symlink GPTk DLLs into Wine"
     done
 
     for f in "$gptk_dir/redist/lib/wine/x86_64-unix"/*; do
         f_name="$(basename "$f")"
+
+        if test "$f_name" = "d3d9.so"; then
+            continue
+        fi
+
         if test -e "$dst_dir/lib/wine/x86_64-unix/$f_name"; then
             mv -f "$dst_dir/lib/wine/x86_64-unix/$f_name" "$dst_dir/lib/wine/x86_64-unix/$f_name.wined3d"
         fi
@@ -1329,7 +1341,7 @@ if test $post_clean = 1; then
         info "created temp dir at %s" "$post_cache_dir"
         rmdir "$post_cache_dir"
     else
-        post_cache_dir="/tmp/cxbsc$(to_prec $(awk 'BEGIN {srand(); print srand()}') 8)"
+        post_cache_dir="/tmp/cxbsc$(to_prec "$(awk 'BEGIN {srand(); print srand()}')" 8)"
         info "could not use mktemp -d; trying cache dir at %s instead" "$post_cache_dir"
     fi
 
