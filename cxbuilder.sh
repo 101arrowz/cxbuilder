@@ -507,7 +507,7 @@ if test $fetch_deps = 1; then
         echo "$tmp_prefix" > "$tmp_prefix_file"
     fi
 
-    brew_deps="bison pkg-config mingw-w64 freetype gettext gnutls gstreamer sdl2"
+    brew_deps="bison pkgconf mingw-w64 freetype gettext gnutls gstreamer sdl2"
     if test $is_macos = 1; then
         brew_deps="$brew_deps molten-vk"
     fi
@@ -526,7 +526,7 @@ if test $fetch_deps = 1; then
             osj_da='Object.defineProperty(Array.prototype, "sh", { get: function() { return this.join(" "); } });'
             osj_parse='var data = JSON.parse($.NSProcessInfo.processInfo.environment.objectForKey("json").js);'
             json="$2" /usr/bin/osascript -l 'JavaScript' -e "$osj_da" -e "$osj_parse" \
-                -e "var res = data$1; typeof res == 'string' ? res : res == null ? undefined : JSON.stringify(res)" 2> /dev/null
+                -e "var res = data$1; typeof res == 'string' ? res : res == null ? undefined : JSON.stringify(res)" 2> /dev/null || true
         else
             builtin_py="$(command -v python)" || builtin_py="$(command -v python3)" || \
                 exite "cannot locate Python; please install Python to use the built-in dependency fetcher, or use --no-deps and install the Wine dependencies yourself"
@@ -534,7 +534,7 @@ if test $fetch_deps = 1; then
             pyjd_da="$(printf "class da(list):\n @property\n def length(self):\n  return len(self)\n @property\n def sh(self):\n  return ' '.join(str(v) for v in self)")"
             pyjd_conv='cv = lambda v: da([cv(a) for a in v]) if isinstance(v, list) else (dd({k:cv(a) for k, a in v.items()}) if isinstance(v, dict) else v)'
             pyj_decoder="$(printf "import os, json\n%s\n%s\n%s\ndata = cv(json.load(os.environ[\"json\"]))" "$pyjd_dd" "$pyjd_da" "$pyjd_conv")"
-            json="$2" PYTHONIOENCODING=utf8 $builtin_py -c "$pyj_decoder; res = data$1; print(res if isinstance(res, str) else json.dumps(res)) if res is not None else None" 2> /dev/null
+            json="$2" PYTHONIOENCODING=utf8 $builtin_py -c "$pyj_decoder; res = data$1; print(res if isinstance(res, str) else json.dumps(res)) if res is not None else None" 2> /dev/null || true
         fi
     }
 
@@ -543,6 +543,7 @@ if test $fetch_deps = 1; then
 
     if test $is_macos = 1; then
         case "$(sw_vers -productVersion)" in
+            15.*) sys_info="sequoia";;
             14.*) sys_info="sonoma";;
             13.*) sys_info-"ventura";;
             12.*) sys_info="monterey";;
