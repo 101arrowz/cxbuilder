@@ -3,6 +3,11 @@ on:
   schedule:
     - cron: "0 21 * * *"
   workflow_dispatch:
+    inputs:
+      cx-version:
+        description: 'CrossOver version'
+        required: false
+        type: string
 jobs:
   find-cxver:
     runs-on: ubuntu-latest
@@ -16,8 +21,12 @@ jobs:
       - name: Find latest CrossOver version
         id: find-ver
         run: |
-          cx_file="$(curl -s "${{ env.CX_META_URL }}" | grep -oE 'crossover-sources-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz' | \
-            sort --version-sort | tail -n 1)"
+          if ${{ inputs.cx-version != '' }}; then
+            cx_file="crossover-sources-${{ inputs.cx-version }}.tar.gz"
+          else
+            cx_file="$(curl -s "${{ env.CX_META_URL }}" | grep -oE 'crossover-sources-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz' | \
+              sort --version-sort | tail -n 1)"
+          fi
           cx_tag=${cx_file##crossover-sources-}
           cx_tag=${cx_tag%%.tar.gz}
           echo "cx-url=${{ env.CX_META_URL }}$cx_file" >> $GITHUB_OUTPUT
@@ -87,8 +96,17 @@ jobs:
       
       - name: Apply patches
         run: |
-          for patch in "${{ env.PATCHES }}"/*; do
-            git apply --recount --unsafe-paths --directory="${{ env.CXWINE }}" "$patch"
+          for patch in "${{ env.PATCHES }}"/*.patch; do
+            if [ ! -f "$patch" ]; then
+              continue
+            fi
+
+            version_range="$(cat "$patch" | grep "# apply_to: " | tail -n 1 | cut -c 13-)"
+            if [[ "${{ env.CX_VERSION }}" =~ $version_range ]]; then
+              git apply --recount --unsafe-paths --directory="${{ env.CXWINE }}" "$patch"
+            else
+              echo "$patch does not apply to ${{ env.CX_VERSION }}, skipping"
+            fi
           done
 
       - name: Run CXBuilder

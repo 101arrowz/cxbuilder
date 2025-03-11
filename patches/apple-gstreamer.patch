@@ -1,3 +1,4 @@
+# apply_to: 24.*.*
 diff --git a/dlls/winegstreamer/wg_transform.c b/dlls/winegstreamer/wg_transform.c
 index ab5ce38..3b521b1 100644
 --- a/dlls/winegstreamer/wg_transform.c
