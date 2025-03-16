@@ -105,7 +105,7 @@ jobs:
             if [[ "${{ env.CX_VERSION }}" =~ $version_range ]]; then
               git apply --recount --unsafe-paths --directory="${{ env.CXWINE }}" "$patch"
             else
-              echo "$patch does not apply to ${{ env.CX_VERSION }}, skipping"
+              echo "$(basename "$patch") does not apply to ${{ env.CX_VERSION }}, skipping"
             fi
           done
 

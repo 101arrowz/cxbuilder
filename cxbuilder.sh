@@ -273,11 +273,11 @@ if test $is_macos = 1; then
     fi
 
     # prevent Wine from thinking it has GCC
-    export CC="${CC:-/usr/bin/clang}";
-    export CXX="${CXX:-/usr/bin/clang++}";
+    export CC="${CC:-/usr/bin/clang}"
+    export CXX="${CXX:-/usr/bin/clang++}"
 fi
 
-info "CC=${CC:-\(unset\)}; CXX: ${CXX:-\(unset\)}"
+info "CC=${CC:-\(unset\)}; CXX=${CXX:-\(unset\)}"
 
 if test -z "$source_dir"; then
     if test -z "$dst_dir"; then
@@ -507,14 +507,15 @@ if test $fetch_deps = 1; then
         echo "$tmp_prefix" > "$tmp_prefix_file"
     fi
 
-    brew_deps="bison pkgconf mingw-w64 freetype gettext gnutls gstreamer sdl2"
+    brew_build_deps="bison mingw-w64 pkgconf"
+    brew_rt_deps="freetype gettext gnutls gstreamer sdl2"
     if test $is_macos = 1; then
-        brew_deps="$brew_deps molten-vk"
+        brew_rt_deps="$brew_rt_deps molten-vk"
     fi
 
     missing_brew_deps=""
 
-    for d in $brew_deps; do
+    for d in $brew_build_deps $brew_rt_deps; do
         if test ! -d "$brew_dir/$d"; then
             missing_brew_deps="${missing_brew_deps:+$missing_brew_deps }$d"
         fi
@@ -554,6 +555,11 @@ if test $fetch_deps = 1; then
             build_sys_info="arm64_$sys_info"
         else
             build_sys_info="$sys_info"
+        fi
+
+        # TODO: remove if brew starts building bottles for x86_64 macOS Sequoia
+        if test "$sys_info" = "sequoia"; then
+            sys_info="sonoma"
         fi
     fi
 
@@ -600,6 +606,23 @@ if test $fetch_deps = 1; then
         done
     }
 
+    # manual overrides for bottles due to version issues, lack of bottles, etc.
+    # - mingw-w64 is temporarily locked to version 11 due to incompatibilities building CrossOver 24 against v12+; arm64_sequoia is a fake copy of arm64_sonoma
+    microbrew_bottle_overrides='{
+        "mingw-w64": {
+            "rebuild": 3,
+            "root_url": "https://ghcr.io/v2/homebrew/core",
+            "files": {
+                "arm64_sequoia": { "cellar": "/opt/homebrew/Cellar", "url": "https://ghcr.io/v2/homebrew/core/mingw-w64/blobs/sha256:3a9ccfa83474eebd0139d97b37d552e460f2ab4c1cccf170d76e214d9950792d", "sha256": "3a9ccfa83474eebd0139d97b37d552e460f2ab4c1cccf170d76e214d9950792d" },
+                "arm64_sonoma": { "cellar": "/opt/homebrew/Cellar", "url": "https://ghcr.io/v2/homebrew/core/mingw-w64/blobs/sha256:3a9ccfa83474eebd0139d97b37d552e460f2ab4c1cccf170d76e214d9950792d", "sha256": "3a9ccfa83474eebd0139d97b37d552e460f2ab4c1cccf170d76e214d9950792d" },
+                "arm64_ventura": { "cellar": "/opt/homebrew/Cellar", "url": "https://ghcr.io/v2/homebrew/core/mingw-w64/blobs/sha256:8aae383c22f21e3bd33de694cd02ed54768b91d08b639198552f4a720236a2d8", "sha256": "8aae383c22f21e3bd33de694cd02ed54768b91d08b639198552f4a720236a2d8" },
+                "sonoma": { "cellar": "/usr/local/Cellar", "url": "https://ghcr.io/v2/homebrew/core/mingw-w64/blobs/sha256:01744df8fcf3dc75bdee3fa7cfc1b41da529ef695218e481eac2ca89ad4e19d7", "sha256": "01744df8fcf3dc75bdee3fa7cfc1b41da529ef695218e481eac2ca89ad4e19d7" },
+                "ventura": { "cellar": "/usr/local/Cellar", "url": "https://ghcr.io/v2/homebrew/core/mingw-w64/blobs/sha256:4f8e1c6ee226f4211cbea00d1d237f0b6769f7d97cdc946755c50c36fd031056", "sha256": "4f8e1c6ee226f4211cbea00d1d237f0b6769f7d97cdc946755c50c36fd031056" },
+                "x86_64_linux": { "cellar": "/home/linuxbrew/.linuxbrew/Cellar", "url": "https://ghcr.io/v2/homebrew/core/mingw-w64/blobs/sha256:3b4d818996775a10f2b890a6f6cd6f78341dee29ebbe0fec4ae8d5d652fb5a5d", "sha256": "3b4d818996775a10f2b890a6f6cd6f78341dee29ebbe0fec4ae8d5d652fb5a5d" }
+            }
+        }
+    }'
+
     # microbrew - uses the Homebrew API to fetch prebuilt bottles
     # TODO: support multiple architectures (i.e. consider $build_sys_info for build-time dependencies)
     microbrew() {
@@ -608,18 +631,33 @@ if test $fetch_deps = 1; then
             return
         fi
 
+        bottle_sys_info="$sys_info"
+
+        # TODO: support multiple architectures
+        # Uncommenting below code leads to breakages due to shared dependencies between build-time and runtime versions
+        # Need to support multiple architectures for a single package to allow this
+
+        # if test "$2" = "build"; then
+        #     bottle_sys_info="$build_sys_info"
+        # fi
+
         info "downloading info for %s..." "$1"
         info_url="https://formulae.brew.sh/api/formula/$1.json"
         info_json="$(curl -s "$info_url")"
 
-        info_bottle="$(sh_json .bottle.stable "$info_json")"
-        test -z "$info_bottle" && exite "failed to load bottle info for %s" "$1"
+        info_bottle="$(sh_json "[\"$1\"]" "$microbrew_bottle_overrides")"
+        if test -z "$info_bottle"; then
+            info_bottle="$(sh_json .bottle.stable "$info_json")"
+            test -z "$info_bottle" && exite "failed to load bottle info for %s" "$1"
+        else
+            info "loaded bottle override for %s" "$1"
+        fi
         
-        info_bottle_arch="$(sh_json ".files.$sys_info" "$info_bottle")"
+        info_bottle_arch="$(sh_json ".files.$bottle_sys_info" "$info_bottle")"
         if test -z "$info_bottle_arch"; then
             info_bottle_arch="$(sh_json ".files.all" "$info_bottle")"
         fi
-        test -z "$info_bottle_arch" && exite "failed to load bottle info for %s, system type %s" "$1" "$sys_info"
+        test -z "$info_bottle_arch" && exite "failed to load bottle info for %s, system type %s" "$1" "$bottle_sys_info"
 
         info_bottle_url="$(sh_json ".url" "$info_bottle_arch")"
         info_bottle_sha="$(sh_json ".sha256" "$info_bottle_arch")"
@@ -646,6 +684,7 @@ if test $fetch_deps = 1; then
         
         key_info "patching %s..." "$1"
         progress_file="$deps_scratch_dir/.patch-progress"
+        echo 0 > "$progress_file"
         LC_ALL=C find "$deps_scratch_dir/$1" -type f -exec sh -e -c '
             brew_default_prefix="$1"
             tmp_prefix="$2"
@@ -722,7 +761,7 @@ if test $fetch_deps = 1; then
                             }
                         '\'')
                         if test -n "$f_names"; then
-                            install_name_tool $f_names "$tmp_write"
+                            install_name_tool $f_names "$tmp_write" 2> /dev/null
                         fi
                     fi
                     # todo: what if directory is not writable?
@@ -758,7 +797,7 @@ if test $fetch_deps = 1; then
         fi
 
         for d in $info_deps; do
-            microbrew "$d"
+            microbrew "$d" "$2"
         done
         
         dep_ver="$(ls "$deps_scratch_dir/$1")"
@@ -780,7 +819,12 @@ if test $fetch_deps = 1; then
         key_info "missing Wine dependencies; installing with built-in dependency fetcher"
 
         for d in $missing_brew_deps; do
-            microbrew "$d"
+            dep_type=""
+            if test "${brew_build_deps#*"$d"}" != "$brew_build_deps"; then
+                dep_type="build"
+            fi
+
+            microbrew "$d" "$dep_type"
         done
     fi
 
@@ -918,7 +962,7 @@ build_wine() {
             
             rm "Makefile"
         fi
-        
+
         # makedep expects distversion.h in parent directory for some reason
         rm -f "$wine_conf_dir/distversion.h" && ln -s "build/include/distversion.h" "$wine_conf_dir/distversion.h" || exite "failed to symlink distversion.h"
 
@@ -1232,6 +1276,10 @@ for l in "$dst_dir/lib/wine/x86_64-unix"/*; do
 done
 
 for l in "$dst_dir/bin"/*; do
+    case "$(file "$l")" in
+    *text*) continue;;
+    esac
+
     patch_lib "$l" "../bin/" "../lib/"
 
     if test $is_macos = 1; then
@@ -1239,6 +1287,7 @@ for l in "$dst_dir/bin"/*; do
         for rpath in $(find_rpaths "$l"); do
             if test "$rpath" = "@loader_path/../.."; then
                 name_changes="${name_changes:+$name_changes:}-delete_rpath:$rpath"
+                break
             fi
         done
 
