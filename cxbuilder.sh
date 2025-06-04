@@ -318,7 +318,7 @@ if test ! -d "$wine_dir"; then
 fi
 
 if test ! -f "$wine_dir/configure"; then
-    exite "%s; could not locate configure script"
+    exite "could not locate configure script"
 fi
 
 info "%s has valid Wine sources" "$wine_dir"
